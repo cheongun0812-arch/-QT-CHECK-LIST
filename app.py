@@ -1,6 +1,7 @@
 import os
 import secrets
 import sqlite3
+import json
 from datetime import date, datetime, timedelta
 from typing import Optional, Tuple
 
@@ -506,6 +507,36 @@ class GoogleSheetsStorage(StorageBase):
         return sub
 
 
+
+def _normalize_service_account(sa_json):
+    """Streamlit secrets에서 읽어온 서비스계정 정보를 google-auth가 이해하는 dict로 정규화합니다.
+    - [GSHEETS_SERVICE_ACCOUNT_JSON] 테이블/매핑 형태는 dict로 변환
+    - private_key에 '\n'이 들어있으면 실제 줄바꿈 '
+'으로 변환
+    - sa_json이 문자열(JSON)로 들어온 경우 json.loads로 파싱
+    """
+    if sa_json is None:
+        return None
+    # Streamlit secrets의 AttrDict/Mapping을 일반 dict로
+    if isinstance(sa_json, str):
+        try:
+            sa = json.loads(sa_json)
+        except Exception:
+            # 문자열인데 JSON이 아니면 그대로 반환
+            sa = {"private_key": sa_json}
+    else:
+        try:
+            sa = dict(sa_json)
+        except Exception:
+            sa = sa_json
+
+    pk = sa.get("private_key", "")
+    if isinstance(pk, str) and ("\n" in pk):
+        sa["private_key"] = pk.replace("\n", "
+")
+    return sa
+
+
 def get_storage() -> StorageBase:
     # Streamlit secrets 우선
     secrets_conf = {}
@@ -516,7 +547,7 @@ def get_storage() -> StorageBase:
 
     spreadsheet_id = secrets_conf.get("GSHEETS_SPREADSHEET_ID") or os.getenv("GSHEETS_SPREADSHEET_ID")
     worksheet_name = secrets_conf.get("GSHEETS_WORKSHEET_NAME") or os.getenv("GSHEETS_WORKSHEET_NAME") or "qti_records"
-    sa_json = secrets_conf.get("GSHEETS_SERVICE_ACCOUNT_JSON")
+    sa_json = _normalize_service_account(secrets_conf.get("GSHEETS_SERVICE_ACCOUNT_JSON"))
 
     if spreadsheet_id and sa_json:
         try:
