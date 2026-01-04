@@ -548,6 +548,7 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
 
 storage = get_storage()
+st.sidebar.info(f"저장소: {type(storage).__name__}")
 
 month_label = st.selectbox("📆 월 선택", options=[m[2] for m in SUPPORTED_MONTHS], index=0)
 year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
