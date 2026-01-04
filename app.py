@@ -94,8 +94,8 @@ def now_hhmm() -> str:
 def parse_sign_and_prayer(text: str) -> Tuple[Optional[str], Optional[str]]:
     """
     입력 예:
-      - "정청운/주를 경외하게..."  -> ("정청운", "주를 경외하게...")
-      - "정청운"                 -> ("정청운", None)
+      - "정큐티/주를 경외하게..."  -> ("정큐티", "주를 경외하게...")
+      - "정큐티"                 -> ("정큐티", None)
       - "/주를 경외하게..."      -> (None, "주를 경외하게...")
     """
     t = (text or "").strip()
