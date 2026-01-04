@@ -94,8 +94,8 @@ def now_hhmm() -> str:
 def parse_sign_and_prayer(text: str) -> Tuple[Optional[str], Optional[str]]:
     """
     입력 예:
-      - "정큐티/주를 경외하게..."  -> ("정큐티", "주를 경외하게...")
-      - "정큐티"                 -> ("정큐티", None)
+      - "나큐티/주를 경외하게..."  -> ("나큐티", "주를 경외하게...")
+      - "나큐티"                 -> ("나큐티", None)
       - "/주를 경외하게..."      -> (None, "주를 경외하게...")
     """
     t = (text or "").strip()
@@ -640,7 +640,7 @@ if not uid:
 with st.expander("📌 사용 안내", expanded=True):
     st.write(
         "- 이 페이지는 URL에 포함된 uid로 본인 기록을 구분합니다.\n"
-        "- 서명 칸은 '이름/짧은 묵상 기도' 형식으로 쓸 수 있어요. 예: 정청운/주를 경외하게...\n"
+        "- 서명 칸은 '이름/짧은 묵상 기도' 형식으로 쓸 수 있어요. 예: 나큐티/주를 경외하게...\n"
         "- 본인 링크를 공유하면 기록이 섞일 수 있어요."
     )
     st.code(f"현재 내 uid: {uid}", language="text")
@@ -674,10 +674,10 @@ with b3:
         st.success(f"{picked_day} 완료 체크 저장")
         st.rerun()
 
-st.markdown("#### ✍️ 확인 서명/나의 묵상 기도 (예: 정청운/주를 경외하게 하는...)")
+st.markdown("#### ✍️ 확인 서명/나의 묵상 기도 (예: 나큐티/주를 경외하게 하는...)")
 sign_pray_input = st.text_input(
     "입력",
-    placeholder="정청운/주를 경외하게 하는 주의 말씀을 주의 종에게 세우소서",
+    placeholder="나큐티/주를 경외하게 하는 주의 말씀을 주의 종에게 세우소서",
 )
 if st.button("서명 저장", use_container_width=True):
     sig, pray = parse_sign_and_prayer(sign_pray_input)
@@ -699,7 +699,7 @@ edited = st.data_editor(
         "완료": st.column_config.CheckboxColumn("완료 체크"),
         "확인 서명/나의 묵상 기도": st.column_config.TextColumn(
             "확인 서명/나의 묵상 기도",
-            help="예: 정청운/주를 경외하게 하는 주의 말씀을 주의 종에게 세우소서",
+            help="예: 나큐티/주를 경외하게 하는 주의 말씀을 주의 종에게 세우소서",
         ),
     },
 )
