@@ -532,8 +532,9 @@ def _normalize_service_account(sa_json):
 
     pk = sa.get("private_key", "")
     if isinstance(pk, str) and ("\n" in pk):
-        sa["private_key"] = pk.replace("\n", "
-")
+    if isinstance(pk, str) and ("\\n" in pk):
+        # Secrets에 "\\n"로 들어온 줄바꿈을 실제 줄바꿈으로 복원
+        sa["private_key"] = pk.replace("\\n", "\n")
     return sa
 
 
