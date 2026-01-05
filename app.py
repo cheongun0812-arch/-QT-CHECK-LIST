@@ -329,4 +329,15 @@ with st.container(border=True):
         st.rerun()
 
 with st.expander("📋 한 달 전체 기록 확인"):
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "날짜": st.column_config.TextColumn(width="small"),
+            "QT 시작": st.column_config.TextColumn(width="small"),
+            "QT 종료": st.column_config.TextColumn(width="small"),
+            "완료": st.column_config.CheckboxColumn(width="small"),
+            "나의 묵상 기도": st.column_config.TextColumn(width="large"),
+        },
+    )
