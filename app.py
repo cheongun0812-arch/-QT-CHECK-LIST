@@ -124,6 +124,7 @@ def badge_for_rate(rate: float) -> tuple[str, str]:
         return "🥉", "브론즈 뱃지"
     return "🌱", "새싹 시작!"
 
+
 def streak_label(streak: int) -> str:
     if streak >= 7:
         return f"🌟 {streak}일 연속"
@@ -133,19 +134,18 @@ def streak_label(streak: int) -> str:
         return f"✨ {streak}일 연속"
     return "오늘부터 시작해요! 🙏"
 
+
 def compute_current_streak(completed_days: set[date], ref: date) -> tuple[int, Optional[date]]:
     """
-    '현재' 스트릭:
-    - ref(오늘)부터 거꾸로 연속 완료면 계속 카운트
-    - 오늘이 미완료면, 마지막 완료일을 기준으로 연속 완료를 계산 (끊김 상태도 보여주기 좋게)
-    반환: (streak_length, streak_end_day)
+    현재 스트릭:
+    - 오늘이 완료면 오늘부터 역으로 연속
+    - 오늘이 미완료면 "마지막 완료일"을 기준으로 연속 계산
     """
     if not completed_days:
         return 0, None
 
     d = ref
     if d not in completed_days:
-        # 마지막 완료일로 이동
         past = [x for x in completed_days if x <= ref]
         if not past:
             return 0, None
@@ -157,6 +157,7 @@ def compute_current_streak(completed_days: set[date], ref: date) -> tuple[int, O
         cnt += 1
         d = d - timedelta(days=1)
     return cnt, end_day
+
 
 def compute_best_streak_in_month(df_month_ui: pd.DataFrame) -> int:
     """
@@ -185,7 +186,7 @@ def render_qt_table_html(df: pd.DataFrame, title: Optional[str] = None):
     """
     - 날짜/QT 시작/QT 종료/완료: 중앙 정렬 (헤더+데이터)
     - 나의 묵상 기도: 왼쪽 정렬
-    - Streamlit dataframe 정렬이 환경에 따라 풀리는 문제를 방지하기 위해 HTML로 렌더링
+    - Streamlit dataframe 정렬이 풀리는 문제 방지 위해 HTML로 렌더링
     """
     if df is None or df.empty:
         if title:
@@ -199,7 +200,6 @@ def render_qt_table_html(df: pd.DataFrame, title: Optional[str] = None):
     if "완료" in dfx.columns:
         dfx["완료"] = dfx["완료"].apply(lambda x: "✅" if bool(x) else "")
 
-    # 컬럼 순서 보장
     cols = [c for c in ["날짜", "QT 시작", "QT 종료", "완료", "나의 묵상 기도"] if c in dfx.columns]
     dfx = dfx[cols]
 
@@ -227,7 +227,7 @@ def render_qt_table_html(df: pd.DataFrame, title: Optional[str] = None):
             white-space: nowrap;
           }
           table.qti-table tbody td {
-            text-align: center !important;   /* 기본: 중앙 */
+            text-align: center !important;
             padding: 10px 10px;
             border-bottom: 1px solid rgba(0,0,0,0.06);
             background: #ffffff;
@@ -249,7 +249,6 @@ def render_qt_table_html(df: pd.DataFrame, title: Optional[str] = None):
           table.qti-table th:nth-child(4), table.qti-table td:nth-child(4) { width: 70px; }
           table.qti-table th:nth-child(5), table.qti-table td:nth-child(5) { width: auto; }
 
-          /* 마지막 줄 border 제거 */
           table.qti-table tbody tr:last-child td { border-bottom: none; }
         </style>
         """,
@@ -400,9 +399,13 @@ def get_storage() -> Optional[GoogleSheetsStorage]:
     return GoogleSheetsStorage(s_id, SHEET_WORKSHEET_NAME, sa_obj)
 
 
+# ✅ 핵심 수정: cache_data 함수가 storage 객체를 인자로 받지 않게 함
 @st.cache_data(ttl=60)
-def cached_all_records(storage: GoogleSheetsStorage) -> pd.DataFrame:
-    return storage.fetch_all_records_df()
+def cached_all_records() -> pd.DataFrame:
+    s = get_storage()
+    if not s:
+        return pd.DataFrame(columns=["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"])
+    return s.fetch_all_records_df()
 
 
 # =========================
@@ -531,33 +534,30 @@ if mode == "성도님(기록하기)":
             st.rerun()
         st.stop()
 
-    # 월 선택
     month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
     year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
     START, END = month_range(year, month)
 
-    # 사용자 월 데이터(표용)
     df = storage.load_month_ui_df(uid, START, END)
 
-    # ====== 오늘/선택일(대시보드 주간 기준일) ======
+    # 주간 기준일: 선택일(없으면 오늘)
     base_day = st.session_state.get("picked_day", today_kst())
 
-    # ====== 사용자 전체 기록 로드(연간/스트릭용) ======
-    df_all = cached_all_records(storage)
+    # ✅ 전체 기록 캐시(인자 없이 호출)
+    df_all = cached_all_records()
     df_user = df_all[df_all["uid"].astype(str) == str(uid)].copy() if not df_all.empty else pd.DataFrame(columns=df_all.columns)
     if not df_user.empty:
         df_user["completed_bool"] = df_user["completed"].astype(str).eq("1")
     else:
         df_user["completed_bool"] = False
 
-    completed_dates = set()
+    completed_dates: set[date] = set()
     if not df_user.empty:
         for s in df_user[df_user["completed_bool"]]["day"].astype(str).unique().tolist():
             d = iso_to_date(s)
             if d:
                 completed_dates.add(d)
 
-    # ====== 주/월/연 통계 ======
     # 주(월~일)
     wk_start = week_start_monday(base_day)
     wk_end = wk_start + timedelta(days=6)
@@ -578,13 +578,11 @@ if mode == "성도님(기록하기)":
     year_completed_days = sum(1 for d in daterange(y_start, y_end) if d in completed_dates)
     year_rate = year_completed_days / year_den if year_den else 0.0
 
-    # ====== 뱃지 + 스트릭 ======
+    # 뱃지 + 스트릭
     badge_emoji, badge_name = badge_for_rate(month_rate)
-
     current_streak, streak_end_day = compute_current_streak(completed_dates, today_kst())
     best_streak_month = compute_best_streak_in_month(df)
 
-    # ====== 대시보드 출력 ======
     render_qti_dashboard(
         week_rate, week_completed_days, week_den,
         month_rate, month_completed_days, month_den,
@@ -653,9 +651,7 @@ if mode == "성도님(기록하기)":
         st.cache_data.clear()
         st.rerun()
 
-    # =========================
     # 주간 단위 기록 확인(월~일) + 전체 보기 토글
-    # =========================
     st.markdown("---")
     st.subheader("📋 기록 확인 (주간)")
 
@@ -663,13 +659,11 @@ if mode == "성도님(기록하기)":
 
     if show_all:
         st.caption("한 달 전체 기록을 한 번에 보여드립니다.")
-        render_qt_table_html(df, title=None)
+        render_qt_table_html(df)
     else:
-        # 주간 기준 날짜(anchor)
         if "week_anchor" not in st.session_state:
             st.session_state["week_anchor"] = picked_day
 
-        # 날짜 변경 시 그 주로 따라가기
         if st.session_state.get("week_anchor_source_day") != picked_day:
             st.session_state["week_anchor"] = picked_day
             st.session_state["week_anchor_source_day"] = picked_day
@@ -710,10 +704,10 @@ if mode == "성도님(기록하기)":
                 st.rerun()
 
         df_week = df[(df["날짜"] >= wk_start_in.isoformat()) & (df["날짜"] <= wk_end_in.isoformat())].copy()
-        render_qt_table_html(df_week, title=None)
+        render_qt_table_html(df_week)
 
 # =========================
-# 관리자 모드(기존 유지)
+# 관리자 모드
 # =========================
 else:
     st.subheader("🔐 관리자 로그인")
@@ -744,7 +738,8 @@ else:
     year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
     START, END = month_range(year, month)
 
-    df_all = cached_all_records(storage)
+    # ✅ 여기서도 인자 없이 호출
+    df_all = cached_all_records()
     if df_all.empty:
         st.info("아직 기록이 없습니다.")
         st.stop()
@@ -817,4 +812,3 @@ else:
     )
 
     st.caption("※ 다운로드한 CSV를 엑셀/구글시트에서 열어 추가 분석할 수 있습니다.")
-
