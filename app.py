@@ -1,9 +1,10 @@
-import os
 import secrets
-import sqlite3
 import json
 from datetime import date, datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import streamlit as st
 
@@ -20,6 +21,18 @@ APP_TITLE = "1월 주만나 큐티 체크 리스트"
 VERSE_TEXT = "주를 경외하게 하는 주의 말씀을 주의 종에게 세우소서 [시편 119:38절]"
 SUPPORTED_MONTHS = [(2026, 1, "2026년 1월"), (2026, 2, "2026년 2월"), (2026, 3, "2026년 3월")]
 
+# --- 타임존 (KST) ---
+KST = ZoneInfo("Asia/Seoul")
+
+def now_kst() -> datetime:
+    return datetime.now(tz=KST)
+
+def today_kst() -> date:
+    return now_kst().date()
+
+def now_hhmm() -> str:
+    return now_kst().strftime("%H:%M")
+
 # --- 유틸리티 함수 ---
 def month_range(year: int, month: int):
     start = date(year, month, 1)
@@ -32,27 +45,79 @@ def daterange(d1, d2):
         yield curr
         curr += timedelta(days=1)
 
-def now_hhmm(): return datetime.now().strftime("%H:%M")
-
 def parse_sign_and_prayer(text):
-    if not text or "/" not in text: return text, ""
+    if not text or "/" not in text:
+        return text, ""
     parts = text.split("/", 1)
     return parts[0].strip(), parts[1].strip()
 
 def combine_sign_prayer(sig, pray):
-    if sig and pray: return f"{sig}/{pray}"
+    if sig and pray:
+        return f"{sig}/{pray}"
     return sig or pray or ""
+
+def get_uid_from_url() -> Optional[str]:
+    # 신버전: st.query_params (Streamlit 1.30+)
+    try:
+        if "uid" in st.query_params:
+            v = st.query_params["uid"]
+            if isinstance(v, list):
+                return v[0] if v else None
+            return str(v)
+    except Exception:
+        pass
+
+    # 구버전 fallback
+    try:
+        qp = st.experimental_get_query_params()
+        v = qp.get("uid")
+        if isinstance(v, list):
+            return v[0] if v else None
+        return str(v) if v is not None else None
+    except Exception:
+        return None
+
+def set_uid_in_url(uid: str) -> None:
+    # 신버전 우선
+    try:
+        st.query_params["uid"] = uid
+        return
+    except Exception:
+        pass
+
+    # 구버전 fallback
+    st.experimental_set_query_params(uid=uid)
+
+def build_share_url(uid: str) -> str:
+    """
+    st.context.url: 사용자가 접속 중인 앱의 base URL (쿼리스트링 제외)
+    문서: st.context.url :contentReference[oaicite:4]{index=4}
+    """
+    base = None
+    try:
+        base = st.context.url  # 쿼리 파라미터는 제거된 base URL
+    except Exception:
+        base = None
+
+    if not base:
+        # st.context.url이 없는(구버전) 환경이면 Secrets로 base URL을 지정
+        base = st.secrets.get("PUBLIC_APP_URL") or "https://<YOUR-APP>.streamlit.app"
+
+    return f"{base}?{urlencode({'uid': uid})}"
 
 # --- 구글 시트 저장소 로직 ---
 class GoogleSheetsStorage:
     def __init__(self, spreadsheet_id, worksheet_name, sa_json):
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
         creds = Credentials.from_service_account_info(sa_json, scopes=scopes)
         self.gc = gspread.authorize(creds)
         self.sh = self.gc.open_by_key(spreadsheet_id)
         try:
             self.ws = self.sh.worksheet(worksheet_name)
-        except:
+        except Exception:
             self.ws = self.sh.add_worksheet(title=worksheet_name, rows="1000", cols="10")
             self.ws.append_row(["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"])
 
@@ -60,72 +125,112 @@ class GoogleSheetsStorage:
         try:
             all_data = self.ws.get_all_records()
             df_all = pd.DataFrame(all_data)
-            if df_all.empty: return self._empty_df(start, end)
-            user_data = df_all[(df_all["uid"].astype(str) == str(uid)) & (df_all["day"] >= start.isoformat()) & (df_all["day"] <= end.isoformat())]
+            if df_all.empty:
+                return self._empty_df(start, end)
+
+            # day는 ISO(YYYY-MM-DD) 문자열이라 문자열 비교가 안전합니다.
+            user_data = df_all[
+                (df_all["uid"].astype(str) == str(uid))
+                & (df_all["day"] >= start.isoformat())
+                & (df_all["day"] <= end.isoformat())
+            ]
             lookup = {r["day"]: r for _, r in user_data.iterrows()}
+
             res = []
             for d in daterange(start, end):
                 ds = d.isoformat()
                 if ds in lookup:
                     r = lookup[ds]
-                    res.append({"날짜": ds, "QT 시작": r.get("start_time",""), "QT 종료": r.get("end_time",""), "완료": str(r.get("completed"))=="1", "확인 서명/나의 묵상 기도": combine_sign_prayer(r.get("signature"), r.get("prayer_note"))})
+                    res.append({
+                        "날짜": ds,
+                        "QT 시작": r.get("start_time", ""),
+                        "QT 종료": r.get("end_time", ""),
+                        "완료": str(r.get("completed")) == "1",
+                        "확인 서명/나의 묵상 기도": combine_sign_prayer(r.get("signature"), r.get("prayer_note")),
+                    })
                 else:
                     res.append({"날짜": ds, "QT 시작": "", "QT 종료": "", "완료": False, "확인 서명/나의 묵상 기도": ""})
+
             return pd.DataFrame(res)
-        except: return self._empty_df(start, end)
+        except Exception:
+            return self._empty_df(start, end)
 
     def _empty_df(self, start, end):
-        return pd.DataFrame([{"날짜": d.isoformat(), "QT 시작": "", "QT 종료": "", "완료": False, "확인 서명/나의 묵상 기도": ""} for d in daterange(start, end)])
+        return pd.DataFrame([
+            {"날짜": d.isoformat(), "QT 시작": "", "QT 종료": "", "완료": False, "확인 서명/나의 묵상 기도": ""}
+            for d in daterange(start, end)
+        ])
 
     def upsert_one(self, uid, day, **kwargs):
         all_records = self.ws.get_all_records()
         df = pd.DataFrame(all_records)
+
         row_idx = -1
         if not df.empty:
             match = df[(df["uid"].astype(str) == str(uid)) & (df["day"] == str(day))]
-            if not match.empty: row_idx = match.index[0] + 2
-        now = datetime.now().isoformat()
+            if not match.empty:
+                row_idx = match.index[0] + 2  # header 때문에 +2
+
+        # ✅ updated_at도 KST로 저장
+        now_iso = now_kst().isoformat()
+
         col_map = {"start_time": 3, "end_time": 4, "completed": 5, "signature": 6, "prayer_note": 7}
         if row_idx != -1:
             for k, v in kwargs.items():
                 if k in col_map:
-                    val = "1" if k == "completed" and v else ("0" if k == "completed" else v)
+                    val = "1" if (k == "completed" and v) else ("0" if k == "completed" else v)
                     self.ws.update_cell(row_idx, col_map[k], val)
-            self.ws.update_cell(row_idx, 8, now)
+            self.ws.update_cell(row_idx, 8, now_iso)
         else:
-            new_row = [str(uid), str(day), kwargs.get("start_time",""), kwargs.get("end_time",""), "1" if kwargs.get("completed") else "0", kwargs.get("signature",""), kwargs.get("prayer_note",""), now]
+            new_row = [
+                str(uid),
+                str(day),
+                kwargs.get("start_time", ""),
+                kwargs.get("end_time", ""),
+                "1" if kwargs.get("completed") else "0",
+                kwargs.get("signature", ""),
+                kwargs.get("prayer_note", ""),
+                now_iso,
+            ]
             self.ws.append_row(new_row)
 
 def get_storage():
     s_id = st.secrets.get("GSHEETS_SPREADSHEET_ID")
     sa_json = st.secrets.get("GSHEETS_SERVICE_ACCOUNT_JSON")
+
+    if not GSHEETS_AVAILABLE:
+        return None
+
     if s_id and sa_json:
-        return GoogleSheetsStorage(s_id, "qti_records", json.loads(sa_json) if isinstance(sa_json, str) else sa_json)
+        sa_obj = json.loads(sa_json) if isinstance(sa_json, str) else sa_json
+        return GoogleSheetsStorage(s_id, "qti_records", sa_obj)
     return None
 
 # --- UI 메인 화면 ---
 st.set_page_config(page_title=APP_TITLE, layout="wide")
-storage = get_storage()
 
+storage = get_storage()
 if not storage:
-    st.error("구글 시트 설정(Secrets)을 확인해주세요.")
+    st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
     st.stop()
 
 st.title(f"✨ {APP_TITLE}")
+st.caption(VERSE_TEXT)
+
 month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
 year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
 START, END = month_range(year, month)
 
 # [UID 관리 및 링크 저장 안내]
-if "uid" not in st.query_params:
+uid = get_uid_from_url()
+if not uid:
     st.info("### 🙏 큐티 체크리스트 시작하기\n성도님 전용 기록지를 만들기 위해 아래 버튼을 눌러주세요.")
     if st.button("🚀 나의 큐티 링크 만들기 (처음 1회)", use_container_width=True):
         new_uid = secrets.token_urlsafe(8)
-        st.query_params["uid"] = new_uid
+        set_uid_in_url(new_uid)
         st.rerun()
     st.stop()
 
-uid = st.query_params["uid"]
 df = storage.load_month(uid, START, END)
 
 # 진행률
@@ -135,27 +240,39 @@ progress = done_cnt / total_cnt
 st.metric("이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
 st.progress(progress)
 
-# 안내 문구 추가
+# ✅ 실제 접속 중인 base URL로 공유 링크 생성
+share_url = build_share_url(uid)
+
 with st.expander("📢 내 기록을 보관하려면? (즐겨찾기 필수)", expanded=False):
     st.success("성도님 전용 모드로 연결되었습니다.")
-    st.markdown(f"**이 주소를 꼭 복사해서 카톡 '나에게 보내기'에 저장하거나 즐겨찾기 하세요!**")
-    st.code(f"https://your-app.streamlit.app/?uid={uid}")
+    st.markdown("**이 주소를 꼭 복사해서 카톡 '나에게 보내기'에 저장하거나 즐겨찾기 하세요!**")
+    st.code(share_url)
 
 st.markdown("---")
 with st.container(border=True):
     st.subheader("✍️ 오늘의 큐티 기록")
-    picked_day = st.date_input("날짜 선택", value=date.today())
+
+    # ✅ rerun 되어도 날짜 선택이 유지되게 key 사용
+    default_day = st.session_state.get("picked_day", today_kst())
+    picked_day = st.date_input("날짜 선택", value=default_day, key="picked_day")
     day_str = picked_day.isoformat()
-    
+
+    # 현재 선택 날짜의 상태 표시(체감 속도↑)
+    row = df[df["날짜"] == day_str]
+    cur_start = row["QT 시작"].values[0] if not row.empty else ""
+    cur_end = row["QT 종료"].values[0] if not row.empty else ""
+    is_done = row["완료"].values[0] if not row.empty else False
+    st.caption(f"현재 기록 → 시작: {cur_start or '-'} / 종료: {cur_end or '-'} / 완료: {'예' if is_done else '아니오'}")
+
     c1, c2, c3 = st.columns(3)
-    if c1.button("▶ 시작", use_container_width=True):
+    if c1.button("▶ 시작(현재시간)", use_container_width=True):
         storage.upsert_one(uid, day_str, start_time=now_hhmm())
         st.rerun()
-    if c2.button("■ 종료", use_container_width=True):
+
+    if c2.button("■ 종료(현재시간)", use_container_width=True):
         storage.upsert_one(uid, day_str, end_time=now_hhmm())
         st.rerun()
-    
-    is_done = df[df["날짜"] == day_str]["완료"].values[0] if not df[df["날짜"] == day_str].empty else False
+
     if c3.button("✅ " + ("취소" if is_done else "완료"), use_container_width=True):
         storage.upsert_one(uid, day_str, completed=not is_done)
         st.rerun()
