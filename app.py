@@ -89,35 +89,77 @@ class SQLiteStorage(StorageBase):
         cur.execute("INSERT INTO qti_records (uid, day, start_time, end_time, completed, signature, prayer_note, updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(uid, day) DO UPDATE SET start_time=excluded.start_time, end_time=excluded.end_time, completed=excluded.completed, signature=excluded.signature, prayer_note=excluded.prayer_note, updated_at=excluded.updated_at", (uid, day, new["start_time"], new["end_time"], new["completed"], new["signature"], new["prayer_note"], now))
         self.conn.commit()
 
+# (앞부분 import 및 유틸리티 함수 생략 - 이전 답변과 동일하게 유지)
+
 class GoogleSheetsStorage(StorageBase):
     def __init__(self, spreadsheet_id, worksheet_name, sa_json):
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(sa_json, scopes=scopes)
-        self.ws = gspread.authorize(creds).open_by_key(spreadsheet_id).worksheet(worksheet_name)
+        self.gc = gspread.authorize(creds)
+        self.sh = self.gc.open_by_key(spreadsheet_id)
+        try:
+            self.ws = self.sh.worksheet(worksheet_name)
+        except:
+            # 시트가 없으면 생성 (헤더 포함)
+            self.ws = self.sh.add_worksheet(title=worksheet_name, rows="1000", cols="20")
+            self.ws.append_row(["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"])
+
     def load_month(self, uid, start, end):
         try:
-            data = self.ws.get_all_records()
-            df = pd.DataFrame(data)
+            records = self.ws.get_all_records()
+            df = pd.DataFrame(records)
             if df.empty: return self._empty_df(start, end)
-            sub = df[(df["uid"] == uid) & (df["day"] >= start.isoformat()) & (df["day"] <= end.isoformat())]
-            existing = {r["day"]: {"날짜": r["day"], "QT 시작": r.get("start_time",""), "QT 종료": r.get("end_time",""), "완료": str(r.get("completed",0))=="1", "확인 서명/나의 묵상 기도": combine_sign_prayer(r.get("signature",""), r.get("prayer_note",""))} for _, r in sub.iterrows()}
+            # 해당 사용자의 이번 달 데이터만 필터링
+            sub = df[(df["uid"] == str(uid)) & (df["day"] >= start.isoformat()) & (df["day"] <= end.isoformat())]
+            existing = {r["day"]: {
+                "날짜": r["day"], 
+                "QT 시작": r.get("start_time",""), 
+                "QT 종료": r.get("end_time",""), 
+                "완료": str(r.get("completed",0))=="1", 
+                "확인 서명/나의 묵상 기도": combine_sign_prayer(r.get("signature",""), r.get("prayer_note",""))
+            } for _, r in sub.iterrows()}
             return pd.DataFrame([existing.get(d.isoformat(), {"날짜": d.isoformat(), "QT 시작": "", "QT 종료": "", "완료": False, "확인 서명/나의 묵상 기도": ""}) for d in daterange(start, end)])
-        except: return self._empty_df(start, end)
+        except:
+            return self._empty_df(start, end)
+
     def _empty_df(self, start, end):
         return pd.DataFrame([{"날짜": d.isoformat(), "QT 시작": "", "QT 종료": "", "완료": False, "확인 서명/나의 묵상 기도": ""} for d in daterange(start, end)])
+
+    # [핵심] 실제로 시트에 데이터를 기록하는 함수입니다.
     def upsert_one(self, uid, day, **kwargs):
-        # 구글 시트 업데이트 로직 (간략화)
-        pass
+        records = self.ws.get_all_records()
+        df = pd.DataFrame(records)
+        now = datetime.now().isoformat()
+        
+        # 기존 데이터가 있는지 확인 (uid와 day가 일치하는 행 찾기)
+        idx = -1
+        if not df.empty:
+            match = df[(df["uid"] == str(uid)) & (df["day"] == str(day))]
+            if not match.empty:
+                idx = match.index[0] + 2 # 헤더가 1번이므로 인덱스 보정
 
-def get_storage():
-    s_id = st.secrets.get("GSHEETS_SPREADSHEET_ID")
-    sa_json = st.secrets.get("GSHEETS_SERVICE_ACCOUNT_JSON")
-    if s_id and sa_json:
-        try:
-            return GoogleSheetsStorage(s_id, "qti_records", json.loads(sa_json) if isinstance(sa_json, str) else sa_json)
-        except: pass
-    return SQLiteStorage()
+        if idx != -1:
+            # 기존 데이터 수정 (각 열 번호에 맞춰 업데이트)
+            if "start_time" in kwargs: self.ws.update_cell(idx, 3, kwargs["start_time"])
+            if "end_time" in kwargs: self.ws.update_cell(idx, 4, kwargs["end_time"])
+            if "completed" in kwargs: self.ws.update_cell(idx, 5, "1" if kwargs["completed"] else "0")
+            if "signature" in kwargs: self.ws.update_cell(idx, 6, kwargs["signature"])
+            if "prayer_note" in kwargs: self.ws.update_cell(idx, 7, kwargs["prayer_note"])
+            self.ws.update_cell(idx, 8, now)
+        else:
+            # 새 데이터 추가
+            row = [
+                str(uid), str(day), 
+                kwargs.get("start_time", ""), 
+                kwargs.get("end_time", ""), 
+                "1" if kwargs.get("completed", False) else "0", 
+                kwargs.get("signature", ""), 
+                kwargs.get("prayer_note", ""), 
+                now
+            ]
+            self.ws.append_row(row)
 
+# (이하 UI 부분 동일)
 # --- [UI 메인 화면] ---
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(f"✨ {APP_TITLE}")
