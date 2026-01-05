@@ -39,11 +39,18 @@ SUPPORTED_MONTHS = [
 ]
 SHEET_WORKSHEET_NAME = "qti_records"
 
+# 관리자 비밀번호 (Secrets 우선, 없으면 코드 상수 fallback)
+# - Streamlit Secrets: ADMIN_PASSWORD 또는 ADMIN_KEY
+ADMIN_KEY_FALLBACK = "yeiun1234"
+
 KST = ZoneInfo("Asia/Seoul")
 
 # 경고 기준(관리자)
 DEFAULT_DROP_ALERT_PCT = 0.05     # 지난주 대비 -5%p 하락하면 경고
 DEFAULT_LOW_WEEK_RATE_PCT = 0.20  # 이번주 참여율이 20% 미만이면 경고
+
+# 성도 직분(콤보)
+MEMBER_ROLES = ["평신도", "서리집사", "안수집사", "권사", "장로", "강도사", "목사", "기타"]
 
 
 def now_kst() -> datetime:
@@ -72,6 +79,16 @@ def normalize_hhmm(s: str) -> str:
 def clamp_50(s: str) -> str:
     s = (s or "").strip()
     return s[:50]
+
+
+def clamp_20(s: str) -> str:
+    s = (s or "").strip()
+    return s[:20]
+
+
+def normalize_role(s: str) -> str:
+    s = (s or "").strip()
+    return s if s in MEMBER_ROLES else ("기타" if s else "")
 
 
 def iso_to_date(s: str) -> Optional[date]:
@@ -278,6 +295,27 @@ except Exception:
 
 
 class GoogleSheetsStorage:
+    """
+    qti_records 시트(일별 기록) 스키마(권장):
+      uid | member_role | member_name | day | start_time | end_time | completed | signature | prayer_note | updated_at
+
+    - 기존 시트가 uid/day/start_time...만 있어도 자동으로 member_role/member_name 컬럼을 "추가"하여 호환합니다.
+    - 컬럼 순서는 시트 상황에 따라 다를 수 있어, 헤더명을 기반으로 업데이트합니다.
+    """
+
+    REQUIRED_COLS = [
+        "uid",
+        "member_role",
+        "member_name",
+        "day",
+        "start_time",
+        "end_time",
+        "completed",
+        "signature",
+        "prayer_note",
+        "updated_at",
+    ]
+
     def __init__(self, spreadsheet_id: str, worksheet_name: str, sa_json: dict):
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -290,10 +328,35 @@ class GoogleSheetsStorage:
         try:
             ws = sh.worksheet(worksheet_name)
         except Exception:
-            ws = sh.add_worksheet(title=worksheet_name, rows="2000", cols="12")
-            ws.append_row(["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"])
+            ws = sh.add_worksheet(title=worksheet_name, rows="2000", cols="14")
+            ws.append_row(self.REQUIRED_COLS)
 
         self.ws = ws
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        header = self.ws.row_values(1) or []
+        if not header:
+            self.ws.update("A1", [self.REQUIRED_COLS])
+            header = self.REQUIRED_COLS[:]
+
+        missing = [c for c in self.REQUIRED_COLS if c not in header]
+        if missing:
+            try:
+                self.ws.add_cols(len(missing))
+            except Exception:
+                pass
+
+            header = self.ws.row_values(1) or header
+            start_col = len(header) + 1
+            for i, col in enumerate(missing):
+                self.ws.update_cell(1, start_col + i, col)
+
+        self._refresh_header_index()
+
+    def _refresh_header_index(self):
+        header = self.ws.row_values(1) or []
+        self.col_idx = {name: i + 1 for i, name in enumerate(header)}
 
     def _empty_month_df(self, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame(
@@ -304,17 +367,17 @@ class GoogleSheetsStorage:
         all_data = self.ws.get_all_records()
         df_all = pd.DataFrame(all_data)
         if df_all.empty:
-            return pd.DataFrame(
-                columns=["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"]
-            )
+            return pd.DataFrame(columns=self.REQUIRED_COLS)
 
-        for col in ["uid", "day", "start_time", "end_time", "signature", "prayer_note", "updated_at"]:
-            if col in df_all.columns:
-                df_all[col] = df_all[col].astype(str).fillna("")
-        if "completed" in df_all.columns:
-            df_all["completed"] = df_all["completed"].astype(str).fillna("0")
+        for c in self.REQUIRED_COLS:
+            if c not in df_all.columns:
+                df_all[c] = ""
 
-        return df_all
+        for col in ["uid", "member_role", "member_name", "day", "start_time", "end_time", "signature", "prayer_note", "updated_at"]:
+            df_all[col] = df_all[col].astype(str).fillna("")
+        df_all["completed"] = df_all["completed"].astype(str).fillna("0")
+
+        return df_all[self.REQUIRED_COLS]
 
     def load_month_ui_df(self, uid: str, start: date, end: date) -> pd.DataFrame:
         try:
@@ -351,6 +414,8 @@ class GoogleSheetsStorage:
             return self._empty_month_df(start, end)
 
     def upsert_one(self, uid: str, day: str, **kwargs):
+        self._ensure_schema()
+
         all_records = self.ws.get_all_records()
         df = pd.DataFrame(all_records)
 
@@ -358,10 +423,9 @@ class GoogleSheetsStorage:
         if not df.empty and "uid" in df.columns and "day" in df.columns:
             match = df[(df["uid"].astype(str) == str(uid)) & (df["day"].astype(str) == str(day))]
             if not match.empty:
-                row_idx = match.index[0] + 2  # header row +2
+                row_idx = match.index[0] + 2
 
         now_iso = now_kst().isoformat()
-        col_map = {"start_time": 3, "end_time": 4, "completed": 5, "signature": 6, "prayer_note": 7}
 
         def norm_value(k, v):
             if k == "completed":
@@ -370,27 +434,48 @@ class GoogleSheetsStorage:
                 return normalize_hhmm(str(v))
             if k in ("prayer_note", "signature"):
                 return clamp_50(str(v))
+            if k == "member_name":
+                return clamp_20(str(v))
+            if k == "member_role":
+                return normalize_role(str(v))
             if v is None:
                 return ""
             return v.strip() if isinstance(v, str) else v
 
-        if row_idx != -1:
-            for k, v in kwargs.items():
-                if k in col_map:
-                    self.ws.update_cell(row_idx, col_map[k], norm_value(k, v))
-            self.ws.update_cell(row_idx, 8, now_iso)
-        else:
-            new_row = [
-                str(uid),
-                str(day),
-                norm_value("start_time", kwargs.get("start_time", "")),
-                norm_value("end_time", kwargs.get("end_time", "")),
-                norm_value("completed", kwargs.get("completed", False)),
-                norm_value("signature", kwargs.get("signature", "")),
-                norm_value("prayer_note", kwargs.get("prayer_note", "")),
-                now_iso,
-            ]
-            self.ws.append_row(new_row)
+        def set_cell(r, col_name, value):
+            c = self.col_idx.get(col_name)
+            if not c:
+                return
+            self.ws.update_cell(r, c, value)
+
+        if row_idx == -1:
+            header = self.ws.row_values(1)
+            row = []
+            for h in header:
+                if h == "uid":
+                    row.append(str(uid))
+                elif h == "day":
+                    row.append(str(day))
+                elif h == "updated_at":
+                    row.append(now_iso)
+                else:
+                    row.append("")
+            self.ws.append_row(row)
+            row_idx = len(self.ws.get_all_values())
+
+        updates = dict(kwargs)
+        if "member_name" in updates:
+            updates["member_name"] = clamp_20(updates.get("member_name", ""))
+        if "member_role" in updates:
+            updates["member_role"] = normalize_role(updates.get("member_role", ""))
+
+        for k, v in updates.items():
+            if k in self.REQUIRED_COLS:
+                set_cell(row_idx, k, norm_value(k, v))
+
+        set_cell(row_idx, "uid", str(uid))
+        set_cell(row_idx, "day", str(day))
+        set_cell(row_idx, "updated_at", now_iso)
 
 
 @st.cache_resource
@@ -411,11 +496,11 @@ def get_storage() -> Optional[GoogleSheetsStorage]:
 def cached_all_records() -> pd.DataFrame:
     s = get_storage()
     if not s:
-        return pd.DataFrame(columns=["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"])
+        return pd.DataFrame(columns=GoogleSheetsStorage.REQUIRED_COLS)
     try:
         return s.fetch_all_records_df()
     except Exception:
-        return pd.DataFrame(columns=["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"])
+        return pd.DataFrame(columns=GoogleSheetsStorage.REQUIRED_COLS)
 
 
 # =========================
@@ -481,9 +566,7 @@ def apply_css():
             font-weight: 900;
           }
 
-          #shareTitle {
-            font-size: 18px;
-          }
+          #shareTitle { font-size: 18px; }
 
           #shareToggleBtn {
             appearance:none;
@@ -506,12 +589,11 @@ def apply_css():
             padding: 0 12px 12px 12px;
             overflow: hidden;
             transition: max-height 520ms ease, opacity 520ms ease, transform 520ms ease;
-            max-height: 420px;
+            max-height: 520px;
             opacity: 1;
             transform: translateY(0px);
           }
 
-          /* 접힘 상태: 내용만 숨김 */
           #sharePanel.collapsed #shareContent {
             max-height: 0px;
             opacity: 0;
@@ -519,7 +601,6 @@ def apply_css():
             padding-bottom: 0px;
           }
 
-          /* 접힘 상태에서 아이콘 모양 변경(▼/▲ 느낌) */
           #sharePanel.collapsed #shareToggleBtn {
             background: rgba(255,255,255,0.92);
           }
@@ -530,8 +611,6 @@ def apply_css():
 
 
 def js_init_share_panel_autohide_5s():
-    # - 5초 후 자동 접힘 (DEFAULT: 펼침)
-    # - 우상단 버튼 클릭으로 토글
     components.html(
         """
         <script>
@@ -543,14 +622,12 @@ def js_init_share_panel_autohide_5s():
             if (!panel || !btn) return;
 
             const setIcon = () => {
-              // 펼침: ▲, 접힘: ▼
               const collapsed = panel.classList.contains('collapsed');
               btn.textContent = collapsed ? '▾' : '▴';
               btn.setAttribute('aria-label', collapsed ? '펼치기' : '숨기기');
               btn.setAttribute('title', collapsed ? '펼치기' : '숨기기');
             };
 
-            // 중복 바인딩 방지
             if (!window.__sharePanelBound) {
               window.__sharePanelBound = true;
               btn.addEventListener('click', () => {
@@ -559,10 +636,8 @@ def js_init_share_panel_autohide_5s():
               });
             }
 
-            // 기본 아이콘 세팅
             setIcon();
 
-            // 5초 후 자동 접힘 (매 rerun마다 다시 예약)
             if (window.__shareAutoHideTimer) clearTimeout(window.__shareAutoHideTimer);
             window.__shareAutoHideTimer = setTimeout(() => {
               panel.classList.add('collapsed');
@@ -717,6 +792,34 @@ def build_weekly_report_pdf(png_bytes: bytes, title: str) -> Optional[bytes]:
 
 
 # =========================
+# 프로필(성도정보) 추출
+# =========================
+def infer_member_profile_from_records(df_user: pd.DataFrame) -> tuple[str, str]:
+    if df_user is None or df_user.empty:
+        return "", ""
+
+    dfx = df_user.copy()
+    dfx = dfx[(dfx["member_name"].astype(str).str.strip() != "") | (dfx["member_role"].astype(str).str.strip() != "")]
+    if dfx.empty:
+        return "", ""
+
+    if "updated_at" in dfx.columns:
+        try:
+            dfx["_t"] = pd.to_datetime(dfx["updated_at"], errors="coerce")
+        except Exception:
+            dfx["_t"] = pd.NaT
+    else:
+        dfx["_t"] = pd.NaT
+
+    if dfx["_t"].notna().any():
+        r = dfx.sort_values("_t").iloc[-1]
+    else:
+        r = dfx.sort_values("day").iloc[-1]
+
+    return normalize_role(r.get("member_role", "")), clamp_20(r.get("member_name", ""))
+
+
+# =========================
 # UI
 # =========================
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -755,9 +858,18 @@ if mode == "성도님(기록하기)":
 
     df = storage.load_month_ui_df(uid, START, END)
 
-    # 전체 기록(연간/스트릭/통계용)
     df_all = cached_all_records()
     df_user = df_all[df_all["uid"].astype(str) == str(uid)].copy() if not df_all.empty else pd.DataFrame(columns=df_all.columns)
+
+    default_role, default_name = infer_member_profile_from_records(df_user) if not df_user.empty else ("", "")
+    if "member_role" not in st.session_state:
+        st.session_state["member_role"] = default_role
+    if "member_name" not in st.session_state:
+        st.session_state["member_name"] = default_name
+
+    member_role = normalize_role(st.session_state.get("member_role", ""))
+    member_name = clamp_20(st.session_state.get("member_name", ""))
+
     if not df_user.empty:
         df_user["completed_bool"] = df_user["completed"].astype(str).eq("1")
     else:
@@ -770,7 +882,6 @@ if mode == "성도님(기록하기)":
             if d:
                 completed_dates.add(d)
 
-    # 주간/월/연
     base_day = st.session_state.get("picked_day", today_kst())
     wk_start = week_start_monday(base_day)
     wk_end = wk_start + timedelta(days=6)
@@ -801,9 +912,6 @@ if mode == "성도님(기록하기)":
         best_streak_month
     )
 
-    # =========================
-    # ✅ 주소 패널(우상단 아이콘 토글 + 5초 후 자동 접힘)
-    # =========================
     share_url = build_share_url(uid)
 
     st.markdown(
@@ -824,14 +932,11 @@ if mode == "성도님(기록하기)":
     if "<YOUR-APP>" in share_url:
         st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
     st.markdown("</div></div>", unsafe_allow_html=True)
-
-    # JS: 5초 후 자동 접힘 + 아이콘 토글
     js_init_share_panel_autohide_5s()
 
     st.markdown("---")
     st.subheader("✍️ 오늘의 큐티 기록")
 
-    # 날짜 선택
     if simple_mode:
         picked_day = today_kst()
         st.info(f"오늘 날짜: {picked_day.isoformat()} (어르신 모드)")
@@ -864,11 +969,11 @@ if mode == "성도님(기록하기)":
 
     c1, c2, c3 = st.columns(3)
     if c1.button("▶ 시작(현재시간)", use_container_width=True):
-        safe_write(lambda: storage.upsert_one(uid, day_str, start_time=now_hhmm_kst()))
+        safe_write(lambda: storage.upsert_one(uid, day_str, start_time=now_hhmm_kst(), member_role=member_role, member_name=member_name))
     if c2.button("■ 종료(현재시간)", use_container_width=True):
-        safe_write(lambda: storage.upsert_one(uid, day_str, end_time=now_hhmm_kst()))
+        safe_write(lambda: storage.upsert_one(uid, day_str, end_time=now_hhmm_kst(), member_role=member_role, member_name=member_name))
     if c3.button("✅ " + ("완료 취소" if is_done else "완료"), use_container_width=True):
-        safe_write(lambda: storage.upsert_one(uid, day_str, completed=not is_done))
+        safe_write(lambda: storage.upsert_one(uid, day_str, completed=not is_done, member_role=member_role, member_name=member_name))
 
     st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
     memo = st.text_area(
@@ -879,7 +984,31 @@ if mode == "성도님(기록하기)":
     )
     if st.button("📝 묵상 기도 저장하기", use_container_width=True, type="primary"):
         memo_clean = clamp_50(memo)
-        safe_write(lambda: storage.upsert_one(uid, day_str, signature="", prayer_note=memo_clean))
+        safe_write(lambda: storage.upsert_one(uid, day_str, signature="", prayer_note=memo_clean, member_role=member_role, member_name=member_name))
+
+    st.markdown("---")
+    with st.container(border=True):
+        st.subheader("🙋 성도 정보(1회 입력)")
+        st.caption("한 번 저장하면 다음 접속 때 자동으로 불러오고, 이후 기록에도 함께 저장됩니다(분석용).")
+
+        col_r, col_n, col_s = st.columns([1, 2, 1])
+        with col_r:
+            idx = MEMBER_ROLES.index(member_role) if member_role in MEMBER_ROLES else 0
+            st.selectbox("직분", MEMBER_ROLES, index=idx, key="member_role")
+        with col_n:
+            st.text_input("성도 이름", value=member_name, key="member_name", placeholder="예) 홍길동")
+        with col_s:
+            st.write("")
+            st.write("")
+            if st.button("💾 성도 정보 저장", use_container_width=True):
+                role_clean = normalize_role(st.session_state.get("member_role", ""))
+                name_clean = clamp_20(st.session_state.get("member_name", ""))
+                if not name_clean:
+                    st.warning("이름을 입력해 주세요.")
+                else:
+                    safe_write(lambda: storage.upsert_one(uid, day_str, member_role=role_clean, member_name=name_clean))
+
+        st.info(f"현재 저장된 성도 정보:  {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
 
     st.markdown("---")
     if simple_mode:
@@ -907,253 +1036,6 @@ if mode == "성도님(기록하기)":
             if "week_anchor" not in st.session_state:
                 st.session_state["week_anchor"] = picked_day
             if st.session_state.get("week_anchor_source_day") != picked_day:
-                st.session_state["week_anchor"] = picked_day
-                st.session_state["week_anchor_source_day"] = picked_day
+                st.session
 
-            anchor = st.session_state["week_anchor"]
-            wk_start2 = week_start_monday(anchor)
-            wk_end2 = wk_start2 + timedelta(days=6)
-            wk_start_in = clamp_date(wk_start2, START, END)
-            wk_end_in = clamp_date(wk_end2, START, END)
-
-            nav1, nav2, nav3 = st.columns([1, 2, 1])
-            with nav1:
-                if st.button("⬅ 이전 주", use_container_width=True):
-                    new_anchor = anchor - timedelta(days=7)
-                    if new_anchor < START:
-                        new_anchor = START
-                    st.session_state["week_anchor"] = new_anchor
-                    st.rerun()
-
-            with nav2:
-                st.markdown(
-                    f"<div style='text-align:center; font-weight:900;'>"
-                    f"{wk_start2.strftime('%m/%d')} (월) ~ {wk_end2.strftime('%m/%d')} (일)"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if wk_start2 != wk_start_in or wk_end2 != wk_end_in:
-                    st.caption("※ 선택한 월 범위에 해당하는 날짜만 표시됩니다.")
-
-            with nav3:
-                if st.button("다음 주 ➡", use_container_width=True):
-                    new_anchor = anchor + timedelta(days=7)
-                    if new_anchor > END:
-                        new_anchor = END
-                    st.session_state["week_anchor"] = new_anchor
-                    st.rerun()
-
-            df_week = df[(df["날짜"] >= wk_start_in.isoformat()) & (df["날짜"] <= wk_end_in.isoformat())].copy()
-            render_qt_table_html(df_week)
-
-# =========================
-# 관리자 모드(강화 + 주간리포트 + 경고배너)
-# =========================
-else:
-    st.subheader("🔐 관리자 로그인")
-
-    admin_pw = st.secrets.get("ADMIN_PASSWORD", "")
-    if not admin_pw:
-        st.warning("Secrets에 ADMIN_PASSWORD가 설정되어 있지 않습니다. 관리자 모드를 사용하려면 설정해주세요.")
-        st.stop()
-
-    if "is_admin" not in st.session_state:
-        st.session_state["is_admin"] = False
-
-    pw = st.text_input("관리자 비밀번호", type="password", placeholder="비밀번호 입력")
-    if st.button("로그인", use_container_width=True):
-        if pw == admin_pw:
-            st.session_state["is_admin"] = True
-            st.success("관리자 모드로 전환되었습니다.")
-        else:
-            st.error("비밀번호가 올바르지 않습니다.")
-
-    if not st.session_state.get("is_admin"):
-        st.stop()
-
-    st.markdown("---")
-    st.subheader("📊 전체 큐티 현황 대시보드")
-
-    # 관리자 경고 임계치 설정
-    st.sidebar.subheader("📣 관리자 경고 설정")
-    drop_alert = st.sidebar.slider("지난 주 대비 하락 경고(퍼센트포인트)", 0.0, 0.30, DEFAULT_DROP_ALERT_PCT, 0.01)
-    low_week_alert = st.sidebar.slider("이번 주 참여율 낮음 경고", 0.0, 0.50, DEFAULT_LOW_WEEK_RATE_PCT, 0.01)
-
-    month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS], key="admin_month")
-    year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
-    START, END = month_range(year, month)
-
-    df_all = cached_all_records()
-    if df_all.empty:
-        st.info("아직 기록이 없습니다.")
-        st.stop()
-
-    df_all["completed_bool"] = df_all["completed"].astype(str).eq("1")
-    df_month = df_all[(df_all["day"] >= START.isoformat()) & (df_all["day"] <= END.isoformat())].copy()
-    if df_month.empty:
-        st.info("선택한 월에는 기록이 없습니다.")
-        st.stop()
-
-    total_users = df_month["uid"].astype(str).nunique()
-    active_users = df_month[df_month["completed_bool"]]["uid"].astype(str).nunique()
-    total_days = (END - START).days + 1
-    total_possible = total_users * total_days if total_users > 0 else 0
-    total_completed = int(df_month["completed_bool"].sum())
-    completion_rate = (total_completed / total_possible) if total_possible else 0.0
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("기록지 사용자 수(UID)", f"{total_users}명")
-    c2.metric("완료 경험 사용자 수", f"{active_users}명")
-    c3.metric("이번 달 완료 건수", f"{total_completed}건")
-    c4.metric("추정 참여율(완료/가능)", f"{completion_rate:.1%}")
-
-    # 주간 비교
-    today = today_kst()
-    this_wk_start = week_start_monday(today)
-    this_wk_end = this_wk_start + timedelta(days=6)
-    last_wk_start = this_wk_start - timedelta(days=7)
-    last_wk_end = last_wk_start + timedelta(days=6)
-
-    this_week_uids = uid_completed_days(df_all, this_wk_start, this_wk_end)
-    last_week_uids = uid_completed_days(df_all, last_wk_start, last_wk_end)
-
-    month_users = set(df_month["uid"].astype(str).unique().tolist())
-    month_users_cnt = len(month_users)
-
-    this_week_participants = len(this_week_uids & month_users)
-    last_week_participants = len(last_week_uids & month_users)
-
-    this_week_rate = (this_week_participants / month_users_cnt) if month_users_cnt else 0.0
-    last_week_rate = (last_week_participants / month_users_cnt) if month_users_cnt else 0.0
-    delta = this_week_rate - last_week_rate
-
-    drop_uids = sorted(list((last_week_uids & month_users) - (this_week_uids & month_users)))
-    drop_count = len(drop_uids)
-
-    # 경고 배너
-    if month_users_cnt > 0:
-        if this_week_rate < low_week_alert:
-            st.error(f"⚠️ 이번 주 참여율이 낮습니다: {this_week_rate:.1%} (기준 {low_week_alert:.1%} 미만)")
-        if delta <= -abs(drop_alert):
-            st.warning(f"📉 지난 주 대비 참여율이 하락했습니다: {delta:+.1%}p (경고 기준 -{drop_alert:.1%}p)")
-
-    st.markdown("### 📈 주간 참여 현황(목회자용)")
-    w1, w2, w3, w4 = st.columns(4)
-    w1.metric("이번 주 참여율", f"{this_week_rate:.1%}", f"{delta:+.1%}")
-    w2.metric("이번 주 참여 UID", f"{this_week_participants}명")
-    w3.metric("지난 주 참여 UID", f"{last_week_participants}명")
-    w4.metric("이번 주 미참여 추정", f"{max(0, month_users_cnt - this_week_participants)}명")
-
-    if drop_uids:
-        with st.expander("⚠️ 지난주 참여했는데 이번주 미참여(케어 우선 후보)", expanded=False):
-            st.write(drop_uids[:300])
-            if len(drop_uids) > 300:
-                st.caption(f"… {len(drop_uids)-300}명 더 있음")
-    else:
-        st.success("이번 주에는 지난주 대비 참여 이탈이 발견되지 않았습니다(월 기준 사용자 내).")
-
-    # 최근 8주
-    st.markdown("### 🗓️ 최근 8주 참여 추이(완료한 UID 수)")
-    wk_series = make_week_series(df_all, weeks=8, anchor=today)
-    st.dataframe(wk_series, use_container_width=True, hide_index=True)
-    st.bar_chart(wk_series.set_index("주(월~일)")["참여 UID 수"])
-
-    # Top 참여자
-    st.markdown("### 🏆 Top 참여자(이번 달, 익명 UID)")
-    top = (
-        df_month[df_month["completed_bool"]]
-        .groupby("uid", as_index=False)["day"]
-        .nunique()
-        .rename(columns={"day": "완료 일수"})
-        .sort_values("완료 일수", ascending=False)
-    )
-    st.dataframe(top.head(50), use_container_width=True, hide_index=True)
-
-    # 주간 리포트(PNG/PDF)
-    st.markdown("---")
-    st.subheader("🧾 주간 리포트(카톡/공유용)")
-
-    report_title = "큐티 참여 현황 주간 리포트"
-    png_bytes = build_weekly_report_png(
-        title=report_title,
-        this_wk_start=this_wk_start,
-        this_wk_end=this_wk_end,
-        month_label=month_label,
-        month_users_cnt=month_users_cnt,
-        this_week_participants=this_week_participants,
-        this_week_rate=this_week_rate,
-        last_week_rate=last_week_rate,
-        delta=delta,
-        drop_count=drop_count,
-        wk_series=wk_series,
-    )
-
-    if png_bytes:
-        st.image(png_bytes, caption="주간 리포트 이미지(미리보기)", use_container_width=True)
-        st.download_button(
-            "📸 리포트 이미지(PNG) 다운로드",
-            data=png_bytes,
-            file_name=f"qti_week_report_{this_wk_start.isoformat()}.png",
-            mime="image/png",
-            use_container_width=True,
-        )
-
-        pdf_bytes = build_weekly_report_pdf(png_bytes, report_title)
-        if pdf_bytes:
-            st.download_button(
-                "📄 리포트 PDF 다운로드",
-                data=pdf_bytes,
-                file_name=f"qti_week_report_{this_wk_start.isoformat()}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-        else:
-            st.info("PDF 생성(reportlab)이 앱 환경에 없어서 PNG만 제공합니다.")
-    else:
-        st.info("리포트 이미지 생성을 위해 matplotlib이 필요합니다. (환경에 없으면 PNG/PDF 기능이 비활성화됩니다.)")
-
-    # 다운로드(원본 + 요약)
-    st.markdown("---")
-    st.subheader("⬇️ 구글 시트 데이터 다운로드")
-
-    csv_all = df_all.drop(columns=["completed_bool"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="전체 원본 데이터 CSV 다운로드",
-        data=csv_all,
-        file_name="qti_records_all.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-    csv_month = df_month.drop(columns=["completed_bool"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label=f"{month_label} 데이터 CSV 다운로드",
-        data=csv_month,
-        file_name=f"qti_records_{year}_{month:02d}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-    summary_week = pd.DataFrame(
-        {
-            "week_start": [this_wk_start.isoformat()],
-            "week_end": [this_wk_end.isoformat()],
-            "month_label": [month_label],
-            "month_users": [month_users_cnt],
-            "this_week_participants": [this_week_participants],
-            "this_week_rate": [this_week_rate],
-            "last_week_rate": [last_week_rate],
-            "delta": [delta],
-            "drop_count": [drop_count],
-        }
-    )
-    st.download_button(
-        label="이번 주 요약 CSV 다운로드",
-        data=summary_week.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"qti_week_summary_{this_wk_start.isoformat()}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-    st.caption("※ 소그룹(셀/구역) 분석을 하려면 ‘group’ 컬럼(예: 1구역, 2구역)을 추가해주면, 그룹별 대시보드/리포트까지 자동 확장 가능합니다.")
 
