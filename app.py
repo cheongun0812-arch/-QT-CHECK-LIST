@@ -172,7 +172,7 @@ class GoogleSheetsStorage:
                             "QT 시작": r.get("start_time", "") or "",
                             "QT 종료": r.get("end_time", "") or "",
                             "완료": str(r.get("completed", "0")) == "1",
-                            "나의 묵상 기도": combine_sign_prayer(r.get("signature", ""), r.get("prayer_note", "")),
+                            "나의 묵상 기도": (r.get("prayer_note") or r.get("signature") or "")
                         }
                     )
                 else:
