@@ -19,7 +19,6 @@ except Exception:
     MATPLOTLIB_OK = False
 
 try:
-    # PDF는 reportlab 있으면 제공(없으면 자동으로 비활성화)
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
     from reportlab.lib.utils import ImageReader
@@ -264,7 +263,6 @@ def render_qt_table_html(df: pd.DataFrame):
         """,
         unsafe_allow_html=True,
     )
-
     st.markdown(f"<div class='qti-table-wrap'>{html}</div>", unsafe_allow_html=True)
 
 
@@ -421,7 +419,7 @@ def cached_all_records() -> pd.DataFrame:
 
 
 # =========================
-# 스타일(접근성 + 대시보드 + 자동슬라이드)
+# 스타일(접근성 + 대시보드 + 주소패널 토글)
 # =========================
 def apply_css():
     st.markdown(
@@ -464,18 +462,66 @@ def apply_css():
             margin-left: 8px;
           }
 
-          /* 주소 블록 자동 슬라이드 */
-          #shareBlock {
+          /* ===== 주소 패널(헤더는 남고, 내용만 접힘) ===== */
+          #sharePanel {
+            border-radius: 16px;
+            border: 1px solid rgba(0,0,0,0.06);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+            background: linear-gradient(135deg, #f7fbff 0%, #fff7fb 55%, #f6fff8 100%);
             overflow: hidden;
-            transition: max-height 550ms ease, opacity 550ms ease, transform 550ms ease;
-            max-height: 500px;
+            margin-top: 6px;
+            margin-bottom: 8px;
+          }
+
+          #shareHeader {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            padding: 10px 12px;
+            font-weight: 900;
+          }
+
+          #shareTitle {
+            font-size: 18px;
+          }
+
+          #shareToggleBtn {
+            appearance:none;
+            border: 1px solid rgba(0,0,0,0.10);
+            background: rgba(255,255,255,0.75);
+            border-radius: 12px;
+            width: 42px;
+            height: 36px;
+            cursor: pointer;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.07);
+            font-size: 18px;
+            font-weight: 900;
+          }
+          #shareToggleBtn:active { transform: scale(0.98); }
+
+          #shareContent {
+            padding: 0 12px 12px 12px;
+            overflow: hidden;
+            transition: max-height 520ms ease, opacity 520ms ease, transform 520ms ease;
+            max-height: 420px;
             opacity: 1;
             transform: translateY(0px);
           }
-          #shareBlock.hidden {
+
+          /* 접힘 상태: 내용만 숨김 */
+          #sharePanel.collapsed #shareContent {
             max-height: 0px;
             opacity: 0;
-            transform: translateY(10px);
+            transform: translateY(-6px);
+            padding-bottom: 0px;
+          }
+
+          /* 접힘 상태에서 아이콘 모양 변경(▼/▲ 느낌) */
+          #sharePanel.collapsed #shareToggleBtn {
+            background: rgba(255,255,255,0.92);
           }
         </style>
         """,
@@ -483,16 +529,44 @@ def apply_css():
     )
 
 
-def js_hide_share_block_after_5s():
+def js_init_share_panel_autohide_5s():
+    # - 5초 후 자동 접힘 (DEFAULT: 펼침)
+    # - 우상단 버튼 클릭으로 토글
     components.html(
         """
         <script>
           (function() {
-            const el = window.parent.document.getElementById('shareBlock');
-            if (!el) return;
-            if (window.__shareHideTimer) clearTimeout(window.__shareHideTimer);
-            window.__shareHideTimer = setTimeout(() => {
-              el.classList.add('hidden');
+            const doc = window.parent.document;
+            const panel = doc.getElementById('sharePanel');
+            const btn = doc.getElementById('shareToggleBtn');
+
+            if (!panel || !btn) return;
+
+            const setIcon = () => {
+              // 펼침: ▲, 접힘: ▼
+              const collapsed = panel.classList.contains('collapsed');
+              btn.textContent = collapsed ? '▾' : '▴';
+              btn.setAttribute('aria-label', collapsed ? '펼치기' : '숨기기');
+              btn.setAttribute('title', collapsed ? '펼치기' : '숨기기');
+            };
+
+            // 중복 바인딩 방지
+            if (!window.__sharePanelBound) {
+              window.__sharePanelBound = true;
+              btn.addEventListener('click', () => {
+                panel.classList.toggle('collapsed');
+                setIcon();
+              });
+            }
+
+            // 기본 아이콘 세팅
+            setIcon();
+
+            // 5초 후 자동 접힘 (매 rerun마다 다시 예약)
+            if (window.__shareAutoHideTimer) clearTimeout(window.__shareAutoHideTimer);
+            window.__shareAutoHideTimer = setTimeout(() => {
+              panel.classList.add('collapsed');
+              setIcon();
             }, 5000);
           })();
         </script>
@@ -501,23 +575,8 @@ def js_hide_share_block_after_5s():
     )
 
 
-def js_show_share_block_now():
-    components.html(
-        """
-        <script>
-          (function() {
-            const el = window.parent.document.getElementById('shareBlock');
-            if (!el) return;
-            el.classList.remove('hidden');
-          })();
-        </script>
-        """,
-        height=0,
-    )
-
-
 # =========================
-# 대시보드 렌더(성도님)
+# 성도님 대시보드 렌더
 # =========================
 def render_my_dashboard(
     week_rate, week_n, week_den,
@@ -563,7 +622,7 @@ def render_my_dashboard(
 
 
 # =========================
-# 관리자 대시보드 유틸
+# 관리자 유틸 + 리포트
 # =========================
 def uid_completed_days(df_all: pd.DataFrame, start: date, end: date) -> set[str]:
     if df_all.empty:
@@ -587,9 +646,6 @@ def make_week_series(df_all: pd.DataFrame, weeks: int = 8, anchor: Optional[date
     return pd.DataFrame(rows)
 
 
-# =========================
-# 관리자 리포트 생성(PNG/PDF)
-# =========================
 def build_weekly_report_png(
     title: str,
     this_wk_start: date,
@@ -610,7 +666,6 @@ def build_weekly_report_png(
     ax = fig.add_axes([0.06, 0.12, 0.88, 0.78])
     ax.axis("off")
 
-    # 상단 텍스트 블록
     lines = [
         title,
         f"기간: {this_wk_start.isoformat()} ~ {this_wk_end.isoformat()} (월~일)",
@@ -624,9 +679,7 @@ def build_weekly_report_png(
     ]
     ax.text(0.0, 1.0, "\n".join(lines), va="top", ha="left", fontsize=12, fontweight="bold")
 
-    # 간단 미니바 차트(최근 8주)
     if wk_series is not None and not wk_series.empty:
-        # 아래쪽에 작은 차트 공간
         ax2 = fig.add_axes([0.08, 0.06, 0.84, 0.18])
         x = list(range(len(wk_series)))
         y = wk_series["참여 UID 수"].astype(int).tolist()
@@ -653,9 +706,7 @@ def build_weekly_report_pdf(png_bytes: bytes, title: str) -> Optional[bytes]:
     c.setFont("Helvetica-Bold", 16)
     c.drawString(40, h - 50, title)
 
-    # 이미지 삽입
     img = ImageReader(BytesIO(png_bytes))
-    # A4에 맞게 적당히 축소
     img_w = w - 80
     img_h = h - 120
     c.drawImage(img, 40, 60, width=img_w, height=img_h, preserveAspectRatio=True, anchor="c")
@@ -679,7 +730,6 @@ if not storage:
     st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
     st.stop()
 
-# ---- 사이드바: 혼란 줄이기 + 관리자 설정
 st.sidebar.header("⚙️ 설정")
 simple_mode = st.sidebar.toggle("어르신 모드(간단 화면)", value=False, help="오늘 기록 중심으로 크게 보여드려요.")
 st.sidebar.caption("※ 기본 화면은 지금처럼 유지됩니다.")
@@ -720,15 +770,13 @@ if mode == "성도님(기록하기)":
             if d:
                 completed_dates.add(d)
 
-    # 주간 기준일
+    # 주간/월/연
     base_day = st.session_state.get("picked_day", today_kst())
     wk_start = week_start_monday(base_day)
     wk_end = wk_start + timedelta(days=6)
     week_completed_days = sum(1 for d in daterange(wk_start, wk_end) if d in completed_dates)
-    week_den = 7
-    week_rate = week_completed_days / week_den if week_den else 0.0
+    week_rate = week_completed_days / 7
 
-    # 월/연
     month_completed_days = int(df["완료"].sum()) if not df.empty else 0
     month_den = (END - START).days + 1
     month_rate = month_completed_days / month_den if month_den else 0.0
@@ -745,7 +793,7 @@ if mode == "성도님(기록하기)":
     best_streak_month = compute_best_streak_in_month(df)
 
     render_my_dashboard(
-        week_rate, week_completed_days, week_den,
+        week_rate, week_completed_days, 7,
         month_rate, month_completed_days, month_den,
         year_rate, year_completed_days, year_den,
         badge_emoji, badge_name,
@@ -754,22 +802,31 @@ if mode == "성도님(기록하기)":
     )
 
     # =========================
-    # 내 기록지 주소 저장하기(접속시 5초 후 자동 숨김)
+    # ✅ 주소 패널(우상단 아이콘 토글 + 5초 후 자동 접힘)
     # =========================
     share_url = build_share_url(uid)
 
-    if st.button("🔗 주소 다시 보기", use_container_width=True):
-        js_show_share_block_now()
-
-    st.markdown("<div id='shareBlock'>", unsafe_allow_html=True)
-    st.markdown("### 📌 내 기록지 주소 저장하기")
-    st.markdown("**아래 주소를 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기에 저장하세요.**")
+    st.markdown(
+        """
+        <div id="sharePanel">
+          <div id="shareHeader">
+            <div id="shareTitle">📌 내 기록지 주소 저장하기</div>
+            <button id="shareToggleBtn" type="button" aria-label="숨기기" title="숨기기">▴</button>
+          </div>
+          <div id="shareContent">
+            <div style="font-weight:800; margin-bottom:8px;">
+              아래 주소를 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기에 저장하세요.
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.code(share_url)
     if "<YOUR-APP>" in share_url:
         st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
-    js_hide_share_block_after_5s()
+    # JS: 5초 후 자동 접힘 + 아이콘 토글
+    js_init_share_panel_autohide_5s()
 
     st.markdown("---")
     st.subheader("✍️ 오늘의 큐티 기록")
@@ -932,7 +989,6 @@ else:
         st.stop()
 
     df_all["completed_bool"] = df_all["completed"].astype(str).eq("1")
-
     df_month = df_all[(df_all["day"] >= START.isoformat()) & (df_all["day"] <= END.isoformat())].copy()
     if df_month.empty:
         st.info("선택한 월에는 기록이 없습니다.")
@@ -951,7 +1007,7 @@ else:
     c3.metric("이번 달 완료 건수", f"{total_completed}건")
     c4.metric("추정 참여율(완료/가능)", f"{completion_rate:.1%}")
 
-    # ===== 주간 비교(이번주 vs 지난주) =====
+    # 주간 비교
     today = today_kst()
     this_wk_start = week_start_monday(today)
     this_wk_end = this_wk_start + timedelta(days=6)
@@ -974,7 +1030,7 @@ else:
     drop_uids = sorted(list((last_week_uids & month_users) - (this_week_uids & month_users)))
     drop_count = len(drop_uids)
 
-    # ✅ 경고 배너(상단)
+    # 경고 배너
     if month_users_cnt > 0:
         if this_week_rate < low_week_alert:
             st.error(f"⚠️ 이번 주 참여율이 낮습니다: {this_week_rate:.1%} (기준 {low_week_alert:.1%} 미만)")
@@ -996,13 +1052,13 @@ else:
     else:
         st.success("이번 주에는 지난주 대비 참여 이탈이 발견되지 않았습니다(월 기준 사용자 내).")
 
-    # ===== 최근 8주 추이 =====
+    # 최근 8주
     st.markdown("### 🗓️ 최근 8주 참여 추이(완료한 UID 수)")
     wk_series = make_week_series(df_all, weeks=8, anchor=today)
     st.dataframe(wk_series, use_container_width=True, hide_index=True)
     st.bar_chart(wk_series.set_index("주(월~일)")["참여 UID 수"])
 
-    # ===== 상위 참여자 =====
+    # Top 참여자
     st.markdown("### 🏆 Top 참여자(이번 달, 익명 UID)")
     top = (
         df_month[df_month["completed_bool"]]
@@ -1013,14 +1069,11 @@ else:
     )
     st.dataframe(top.head(50), use_container_width=True, hide_index=True)
 
-    # =========================
-    # ✅ 주간 리포트 자동 생성(PNG/PDF)
-    # =========================
+    # 주간 리포트(PNG/PDF)
     st.markdown("---")
     st.subheader("🧾 주간 리포트(카톡/공유용)")
 
-    report_title = f"큐티 참여 현황 주간 리포트"
-
+    report_title = "큐티 참여 현황 주간 리포트"
     png_bytes = build_weekly_report_png(
         title=report_title,
         this_wk_start=this_wk_start,
@@ -1059,9 +1112,7 @@ else:
     else:
         st.info("리포트 이미지 생성을 위해 matplotlib이 필요합니다. (환경에 없으면 PNG/PDF 기능이 비활성화됩니다.)")
 
-    # =========================
     # 다운로드(원본 + 요약)
-    # =========================
     st.markdown("---")
     st.subheader("⬇️ 구글 시트 데이터 다운로드")
 
@@ -1105,3 +1156,4 @@ else:
     )
 
     st.caption("※ 소그룹(셀/구역) 분석을 하려면 ‘group’ 컬럼(예: 1구역, 2구역)을 추가해주면, 그룹별 대시보드/리포트까지 자동 확장 가능합니다.")
+
