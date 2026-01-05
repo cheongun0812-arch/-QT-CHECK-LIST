@@ -120,15 +120,33 @@ month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
 year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
 START, END = month_range(year, month)
 
-# UID 관리
+# -------------------------
+# 사용자 접속 관리 (UID)
+# -------------------------
 if "uid" not in st.query_params:
-    if st.button("🚀 나의 큐티 링크 만들기"):
-        st.query_params["uid"] = secrets.token_urlsafe(8)
+    st.markdown("### 🙏 큐티 체크리스트 시작하기")
+    st.info("성도님 전용 기록지를 만들기 위해 아래 버튼을 눌러주세요.")
+    if st.button("🚀 나의 큐티 링크 만들기 (처음 1회)", use_container_width=True):
+        new_uid = secrets.token_urlsafe(8) # 고유 아이디 생성
+        st.query_params["uid"] = new_uid
         st.rerun()
     st.stop()
 
+# 링크가 있는 경우 (기존 사용자)
 uid = st.query_params["uid"]
-df = storage.load_month(uid, START, END)
+
+# 중요: 성도님들에게 링크 저장 안내를 보여줍니다.
+with st.expander("📢 내 기록을 잃어버리지 않으려면? (필독)", expanded=False):
+    st.success("성도님 전용 모드로 연결되었습니다.")
+    st.markdown(f"""
+    1. 지금 보고 계신 **이 브라우저 창을 즐겨찾기** 하세요.
+    2. 또는 아래 **나만의 주소**를 복사해서 **카카오톡(나에게 보내기)**에 저장해 두세요.
+    3. 내일도 반드시 **이 주소로 접속**해야 오늘의 기록이 보입니다.
+    """)
+    # 현재 접속 중인 전체 URL 주소를 생성하여 보여줌
+    share_url = f"https://your-app-name.streamlit.app/?uid={uid}" 
+    st.code(share_url, language="text")
+    st.caption("※ 주소가 다르면 새로운 기록지로 인식되어 이전 기록이 보이지 않습니다.")
 
 # 진행률
 done_cnt = df["완료"].sum()
