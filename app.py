@@ -39,7 +39,7 @@ def now_hhmm_kst() -> str:
 
 
 # =========================
-# Query Params (구버전 API로만 통일)  ✅ 중요
+# Query Params (구버전 API로만 통일)
 # =========================
 def get_uid_from_url() -> Optional[str]:
     qp = st.experimental_get_query_params()
@@ -86,8 +86,7 @@ def daterange(d1: date, d2: date):
 
 
 def week_start_monday(d: date) -> date:
-    # 월요일=0 ... 일요일=6
-    return d - timedelta(days=d.weekday())
+    return d - timedelta(days=d.weekday())  # 월=0
 
 
 def clamp_date(d: date, start: date, end: date) -> date:
@@ -98,59 +97,169 @@ def clamp_date(d: date, start: date, end: date) -> date:
     return d
 
 
+def days_in_year(year: int) -> int:
+    return (date(year + 1, 1, 1) - date(year, 1, 1)).days
+
+
+def iso_to_date(s: str) -> Optional[date]:
+    try:
+        return date.fromisoformat(str(s))
+    except Exception:
+        return None
+
+
 # =========================
-# 표 스타일링(정렬)
+# 재미 요소(뱃지/스트릭)
 # =========================
-def style_qt_table(df: pd.DataFrame):
+def badge_for_rate(rate: float) -> tuple[str, str]:
     """
-    - 헤더: 가운데 정렬
-    - 날짜/QT 시작/QT 종료/완료: 가운데 정렬
+    월 참여율 기준 뱃지 지급
+    30% 🥉 / 60% 🥈 / 90% 🥇
+    """
+    if rate >= 0.9:
+        return "🥇", "골드 뱃지"
+    if rate >= 0.6:
+        return "🥈", "실버 뱃지"
+    if rate >= 0.3:
+        return "🥉", "브론즈 뱃지"
+    return "🌱", "새싹 시작!"
+
+def streak_label(streak: int) -> str:
+    if streak >= 7:
+        return f"🌟 {streak}일 연속"
+    if streak >= 3:
+        return f"🔥 {streak}일 연속"
+    if streak >= 1:
+        return f"✨ {streak}일 연속"
+    return "오늘부터 시작해요! 🙏"
+
+def compute_current_streak(completed_days: set[date], ref: date) -> tuple[int, Optional[date]]:
+    """
+    '현재' 스트릭:
+    - ref(오늘)부터 거꾸로 연속 완료면 계속 카운트
+    - 오늘이 미완료면, 마지막 완료일을 기준으로 연속 완료를 계산 (끊김 상태도 보여주기 좋게)
+    반환: (streak_length, streak_end_day)
+    """
+    if not completed_days:
+        return 0, None
+
+    d = ref
+    if d not in completed_days:
+        # 마지막 완료일로 이동
+        past = [x for x in completed_days if x <= ref]
+        if not past:
+            return 0, None
+        d = max(past)
+
+    end_day = d
+    cnt = 0
+    while d in completed_days:
+        cnt += 1
+        d = d - timedelta(days=1)
+    return cnt, end_day
+
+def compute_best_streak_in_month(df_month_ui: pd.DataFrame) -> int:
+    """
+    df_month_ui: 날짜(ISO), 완료(bool)
+    """
+    if df_month_ui.empty:
+        return 0
+    df2 = df_month_ui.copy()
+    df2["d"] = df2["날짜"].apply(lambda x: iso_to_date(x))
+    df2 = df2.dropna(subset=["d"]).sort_values("d")
+    best = 0
+    cur = 0
+    for _, r in df2.iterrows():
+        if bool(r["완료"]):
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    return best
+
+
+# =========================
+# 기록 표 렌더링(정렬 고정: HTML 테이블)
+# =========================
+def render_qt_table_html(df: pd.DataFrame, title: Optional[str] = None):
+    """
+    - 날짜/QT 시작/QT 종료/완료: 중앙 정렬 (헤더+데이터)
     - 나의 묵상 기도: 왼쪽 정렬
+    - Streamlit dataframe 정렬이 환경에 따라 풀리는 문제를 방지하기 위해 HTML로 렌더링
     """
-    center_cols = [c for c in ["날짜", "QT 시작", "QT 종료", "완료"] if c in df.columns]
-    left_cols = [c for c in ["나의 묵상 기도"] if c in df.columns]
+    if df is None or df.empty:
+        if title:
+            st.markdown(f"**{title}**")
+        st.info("표시할 기록이 없습니다.")
+        return
 
-    sty = df.style
+    dfx = df.copy()
 
-    # 데이터 정렬
-    if center_cols:
-        sty = sty.set_properties(**{"text-align": "center"}, subset=center_cols)
-    if left_cols:
-        sty = sty.set_properties(**{"text-align": "left"}, subset=left_cols)
+    # 완료 체크는 보기 좋게 ✅로 표시
+    if "완료" in dfx.columns:
+        dfx["완료"] = dfx["완료"].apply(lambda x: "✅" if bool(x) else "")
 
-    # 헤더 정렬(전체 가운데)
-    sty = sty.set_table_styles(
-        [{"selector": "th", "props": [("text-align", "center")]}],
-        overwrite=False,
+    # 컬럼 순서 보장
+    cols = [c for c in ["날짜", "QT 시작", "QT 종료", "완료", "나의 묵상 기도"] if c in dfx.columns]
+    dfx = dfx[cols]
+
+    html = dfx.to_html(index=False, escape=True, classes="qti-table")
+
+    st.markdown(
+        """
+        <style>
+          .qti-table-wrap { overflow-x: auto; }
+          table.qti-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 8px 22px rgba(0,0,0,0.07);
+            border: 1px solid rgba(0,0,0,0.06);
+          }
+          table.qti-table thead th {
+            text-align: center !important;
+            font-weight: 800;
+            background: linear-gradient(135deg, #f7fbff 0%, #fff7fb 100%);
+            padding: 10px 10px;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+            white-space: nowrap;
+          }
+          table.qti-table tbody td {
+            text-align: center !important;   /* 기본: 중앙 */
+            padding: 10px 10px;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+            background: #ffffff;
+            white-space: nowrap;
+            vertical-align: top;
+          }
+
+          /* 5번째 컬럼(나의 묵상 기도)은 왼쪽 정렬 + 줄바꿈 허용 */
+          table.qti-table tbody td:nth-child(5) {
+            text-align: left !important;
+            white-space: normal;
+            line-height: 1.35;
+          }
+
+          /* 컬럼 폭(대략) */
+          table.qti-table th:nth-child(1), table.qti-table td:nth-child(1) { width: 120px; }
+          table.qti-table th:nth-child(2), table.qti-table td:nth-child(2) { width: 90px; }
+          table.qti-table th:nth-child(3), table.qti-table td:nth-child(3) { width: 90px; }
+          table.qti-table th:nth-child(4), table.qti-table td:nth-child(4) { width: 70px; }
+          table.qti-table th:nth-child(5), table.qti-table td:nth-child(5) { width: auto; }
+
+          /* 마지막 줄 border 제거 */
+          table.qti-table tbody tr:last-child td { border-bottom: none; }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    # 컬럼 폭(대략) - Streamlit에서 Styler는 HTML 테이블로 렌더링되므로 폭 지정 가능
-    # pandas styler에서 th/td는 col0, col1 클래스가 붙는 경우가 많아 그 방식 사용
-    # (환경에 따라 완전 고정은 아니지만 대부분 잘 먹습니다)
-    styles = []
-    col_order = list(df.columns)
+    if title:
+        st.markdown(f"**{title}**")
 
-    def add_col_width(col_name: str, width_px: int):
-        if col_name not in col_order:
-            return
-        idx = col_order.index(col_name)
-        styles.extend(
-            [
-                {"selector": f"th.col{idx}", "props": [("width", f"{width_px}px")]},
-                {"selector": f"td.col{idx}", "props": [("width", f"{width_px}px")]},
-            ]
-        )
-
-    add_col_width("날짜", 110)
-    add_col_width("QT 시작", 90)
-    add_col_width("QT 종료", 90)
-    add_col_width("완료", 70)
-    add_col_width("나의 묵상 기도", 520)
-
-    if styles:
-        sty = sty.set_table_styles(styles, overwrite=False)
-
-    return sty
+    st.markdown(f"<div class='qti-table-wrap'>{html}</div>", unsafe_allow_html=True)
 
 
 # =========================
@@ -195,11 +304,13 @@ class GoogleSheetsStorage:
             return pd.DataFrame(
                 columns=["uid", "day", "start_time", "end_time", "completed", "signature", "prayer_note", "updated_at"]
             )
+
         for col in ["uid", "day", "start_time", "end_time", "signature", "prayer_note", "updated_at"]:
             if col in df_all.columns:
                 df_all[col] = df_all[col].astype(str).fillna("")
         if "completed" in df_all.columns:
             df_all["completed"] = df_all["completed"].astype(str).fillna("0")
+
         return df_all
 
     def load_month_ui_df(self, uid: str, start: date, end: date) -> pd.DataFrame:
@@ -226,7 +337,6 @@ class GoogleSheetsStorage:
                             "QT 시작": r.get("start_time", "") or "",
                             "QT 종료": r.get("end_time", "") or "",
                             "완료": str(r.get("completed", "0")) == "1",
-                            # ✅ prayer_note만 사용 + 과거 signature fallback
                             "나의 묵상 기도": (r.get("prayer_note") or r.get("signature") or ""),
                         }
                     )
@@ -245,7 +355,7 @@ class GoogleSheetsStorage:
         if not df.empty and "uid" in df.columns and "day" in df.columns:
             match = df[(df["uid"].astype(str) == str(uid)) & (df["day"].astype(str) == str(day))]
             if not match.empty:
-                row_idx = match.index[0] + 2  # header row 때문에 +2
+                row_idx = match.index[0] + 2  # header row +2
 
         now_iso = now_kst().isoformat()
         col_map = {"start_time": 3, "end_time": 4, "completed": 5, "signature": 6, "prayer_note": 7}
@@ -296,7 +406,7 @@ def cached_all_records(storage: GoogleSheetsStorage) -> pd.DataFrame:
 
 
 # =========================
-# 접근성(어르신 친화) 스타일
+# 접근성 + 대시보드 카드 스타일
 # =========================
 def apply_accessibility_css():
     st.markdown(
@@ -310,7 +420,83 @@ def apply_accessibility_css():
           }
           textarea, input { font-size: 18px !important; }
           details summary { font-size: 18px !important; }
+
+          .qti-cards { display:flex; gap:14px; flex-wrap:wrap; margin: 8px 0 8px 0; }
+          .qti-card {
+            flex: 1 1 260px;
+            border-radius: 18px;
+            padding: 14px 16px;
+            box-shadow: 0 8px 22px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0,0,0,0.06);
+          }
+          .qti-title { font-weight: 800; font-size: 18px; margin-bottom: 6px; }
+          .qti-rate { font-weight: 900; font-size: 26px; line-height: 1.1; }
+          .qti-sub { opacity: 0.85; font-size: 15px; margin-top: 4px; }
+
+          .qti-strip {
+            margin-top: 10px;
+            padding: 12px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(0,0,0,0.06);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+            background: linear-gradient(135deg, #fff7d6 0%, #f2f8ff 45%, #ffe7ff 100%);
+          }
+          .qti-strip-title { font-weight: 900; font-size: 18px; margin-bottom: 6px; }
+          .qti-strip-line { font-weight: 700; font-size: 16px; }
+          .qti-chip {
+            display:inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 800;
+            background: rgba(255,255,255,0.7);
+            border: 1px solid rgba(0,0,0,0.06);
+            margin-left: 8px;
+          }
         </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_qti_dashboard(
+    week_rate, week_n, week_den,
+    month_rate, month_n, month_den,
+    year_rate, year_n, year_den,
+    badge_emoji, badge_name,
+    current_streak, streak_end_day,
+    best_streak_month
+):
+    st.markdown("## 🌈 나의 큐티 현황")
+
+    st.markdown(
+        f"""
+        <div class="qti-cards">
+          <div class="qti-card" style="background: linear-gradient(135deg, #ffe1e1 0%, #fff7f7 45%, #e8f1ff 100%);">
+            <div class="qti-title">주별 큐티 현황 <span class="qti-chip">월~일</span></div>
+            <div class="qti-rate">참여율 {week_rate:.0%}</div>
+            <div class="qti-sub">({week_n}/{week_den}일)</div>
+          </div>
+
+          <div class="qti-card" style="background: linear-gradient(135deg, #e6f0ff 0%, #f2f8ff 45%, #fff1d6 100%);">
+            <div class="qti-title">월 누적 현황 <span class="qti-chip">이번 달</span></div>
+            <div class="qti-rate">참여율 {month_rate:.0%}</div>
+            <div class="qti-sub">({month_n}/{month_den}일)</div>
+          </div>
+
+          <div class="qti-card" style="background: linear-gradient(135deg, #eafff1 0%, #f4fff8 45%, #ffe7ff 100%);">
+            <div class="qti-title">연간 참여율 <span class="qti-chip">올해</span></div>
+            <div class="qti-rate">참여율 {year_rate:.0%}</div>
+            <div class="qti-sub">({year_n}/{year_den}일)</div>
+          </div>
+        </div>
+
+        <div class="qti-strip">
+          <div class="qti-strip-title">🎁 오늘의 응원</div>
+          <div class="qti-strip-line">이번 달 뱃지: <b>{badge_emoji} {badge_name}</b></div>
+          <div class="qti-strip-line">연속 참여: <b>{streak_label(current_streak)}</b> <span class="qti-chip">{('기준일 ' + str(streak_end_day)) if streak_end_day else '아직 기록이 없어요'}</span></div>
+          <div class="qti-strip-line">이번 달 최고 연속: <b>{('🌟 ' + str(best_streak_month) + '일') if best_streak_month >= 7 else ('🔥 ' + str(best_streak_month) + '일') if best_streak_month >= 3 else (str(best_streak_month) + '일')}</b></div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -345,18 +531,70 @@ if mode == "성도님(기록하기)":
             st.rerun()
         st.stop()
 
+    # 월 선택
     month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
     year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
     START, END = month_range(year, month)
 
+    # 사용자 월 데이터(표용)
     df = storage.load_month_ui_df(uid, START, END)
 
-    done_cnt = int(df["완료"].sum()) if not df.empty else 0
-    total_cnt = len(df) if len(df) > 0 else 1
-    progress = done_cnt / total_cnt
-    st.metric("이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
-    st.progress(progress)
+    # ====== 오늘/선택일(대시보드 주간 기준일) ======
+    base_day = st.session_state.get("picked_day", today_kst())
 
+    # ====== 사용자 전체 기록 로드(연간/스트릭용) ======
+    df_all = cached_all_records(storage)
+    df_user = df_all[df_all["uid"].astype(str) == str(uid)].copy() if not df_all.empty else pd.DataFrame(columns=df_all.columns)
+    if not df_user.empty:
+        df_user["completed_bool"] = df_user["completed"].astype(str).eq("1")
+    else:
+        df_user["completed_bool"] = False
+
+    completed_dates = set()
+    if not df_user.empty:
+        for s in df_user[df_user["completed_bool"]]["day"].astype(str).unique().tolist():
+            d = iso_to_date(s)
+            if d:
+                completed_dates.add(d)
+
+    # ====== 주/월/연 통계 ======
+    # 주(월~일)
+    wk_start = week_start_monday(base_day)
+    wk_end = wk_start + timedelta(days=6)
+    week_completed_days = sum(1 for d in daterange(wk_start, wk_end) if d in completed_dates)
+    week_den = 7
+    week_rate = week_completed_days / week_den if week_den else 0.0
+
+    # 월 누적(선택 월)
+    month_completed_days = int(df["완료"].sum()) if not df.empty else 0
+    month_den = (END - START).days + 1
+    month_rate = month_completed_days / month_den if month_den else 0.0
+
+    # 연간(올해)
+    this_year = today_kst().year
+    year_den = days_in_year(this_year)
+    y_start = date(this_year, 1, 1)
+    y_end = date(this_year, 12, 31)
+    year_completed_days = sum(1 for d in daterange(y_start, y_end) if d in completed_dates)
+    year_rate = year_completed_days / year_den if year_den else 0.0
+
+    # ====== 뱃지 + 스트릭 ======
+    badge_emoji, badge_name = badge_for_rate(month_rate)
+
+    current_streak, streak_end_day = compute_current_streak(completed_dates, today_kst())
+    best_streak_month = compute_best_streak_in_month(df)
+
+    # ====== 대시보드 출력 ======
+    render_qti_dashboard(
+        week_rate, week_completed_days, week_den,
+        month_rate, month_completed_days, month_den,
+        year_rate, year_completed_days, year_den,
+        badge_emoji, badge_name,
+        current_streak, streak_end_day,
+        best_streak_month
+    )
+
+    # 공유 URL
     share_url = build_share_url(uid)
     st.markdown("### 📌 내 기록지 주소 저장하기")
     st.markdown("**아래 주소를 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기에 저장하세요.**")
@@ -367,7 +605,7 @@ if mode == "성도님(기록하기)":
     st.markdown("---")
     st.subheader("✍️ 오늘의 큐티 기록")
 
-    col_a, col_b = st.columns([1, 2])
+    col_a, _ = st.columns([1, 2])
     with col_a:
         if st.button("📍 오늘로 이동", use_container_width=True):
             st.session_state["picked_day"] = today_kst()
@@ -404,19 +642,19 @@ if mode == "성도님(기록하기)":
     memo = st.text_area(
         "경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
         height=90,
-        max_chars=50,  # ✅ 50자 제한
+        max_chars=50,
         placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
     )
 
     if st.button("📝 묵상 기도 저장하기", use_container_width=True, type="primary"):
         memo_clean = (memo or "").strip()
-        storage.upsert_one(uid, day_str, signature="", prayer_note=memo_clean)  # ✅ prayer_note에만 저장
+        storage.upsert_one(uid, day_str, signature="", prayer_note=memo_clean)
         st.success("저장되었습니다!")
         st.cache_data.clear()
         st.rerun()
 
     # =========================
-    # ✅ 주간 단위 기록 확인 (월~일)
+    # 주간 단위 기록 확인(월~일) + 전체 보기 토글
     # =========================
     st.markdown("---")
     st.subheader("📋 기록 확인 (주간)")
@@ -425,34 +663,29 @@ if mode == "성도님(기록하기)":
 
     if show_all:
         st.caption("한 달 전체 기록을 한 번에 보여드립니다.")
-        st.dataframe(style_qt_table(df), use_container_width=True, hide_index=True)
+        render_qt_table_html(df, title=None)
     else:
-        # 주간 기준 날짜(anchor)를 세팅
-        # - 기본: 선택한 날짜(picked_day)를 기준으로 그 주를 보여줌
-        # - 이전/다음 주 버튼으로 이동 가능
+        # 주간 기준 날짜(anchor)
         if "week_anchor" not in st.session_state:
             st.session_state["week_anchor"] = picked_day
 
-        # 사용자가 날짜를 바꾸면 그 날짜의 주로 따라가게
+        # 날짜 변경 시 그 주로 따라가기
         if st.session_state.get("week_anchor_source_day") != picked_day:
             st.session_state["week_anchor"] = picked_day
             st.session_state["week_anchor_source_day"] = picked_day
 
         anchor = st.session_state["week_anchor"]
+        wk_start2 = week_start_monday(anchor)
+        wk_end2 = wk_start2 + timedelta(days=6)
 
-        # 주간 범위 계산(월~일), 월 선택 범위 밖은 clamp 해서 표시
-        wk_start = week_start_monday(anchor)
-        wk_end = wk_start + timedelta(days=6)
-
-        wk_start_in = clamp_date(wk_start, START, END)
-        wk_end_in = clamp_date(wk_end, START, END)
+        wk_start_in = clamp_date(wk_start2, START, END)
+        wk_end_in = clamp_date(wk_end2, START, END)
 
         nav1, nav2, nav3 = st.columns([1, 2, 1])
 
         with nav1:
             if st.button("⬅ 이전 주", use_container_width=True):
                 new_anchor = anchor - timedelta(days=7)
-                # 너무 이전으로 가면 월 시작 근처로 clamp
                 if new_anchor < START:
                     new_anchor = START
                 st.session_state["week_anchor"] = new_anchor
@@ -460,12 +693,12 @@ if mode == "성도님(기록하기)":
 
         with nav2:
             st.markdown(
-                f"<div style='text-align:center; font-weight:600;'>"
-                f"{wk_start.strftime('%m/%d')} (월) ~ {wk_end.strftime('%m/%d')} (일)"
+                f"<div style='text-align:center; font-weight:900;'>"
+                f"{wk_start2.strftime('%m/%d')} (월) ~ {wk_end2.strftime('%m/%d')} (일)"
                 f"</div>",
                 unsafe_allow_html=True,
             )
-            if wk_start != wk_start_in or wk_end != wk_end_in:
+            if wk_start2 != wk_start_in or wk_end2 != wk_end_in:
                 st.caption("※ 선택한 월 범위에 해당하는 날짜만 표시됩니다.")
 
         with nav3:
@@ -477,10 +710,10 @@ if mode == "성도님(기록하기)":
                 st.rerun()
 
         df_week = df[(df["날짜"] >= wk_start_in.isoformat()) & (df["날짜"] <= wk_end_in.isoformat())].copy()
-        st.dataframe(style_qt_table(df_week), use_container_width=True, hide_index=True)
+        render_qt_table_html(df_week, title=None)
 
 # =========================
-# 관리자 모드
+# 관리자 모드(기존 유지)
 # =========================
 else:
     st.subheader("🔐 관리자 로그인")
