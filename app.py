@@ -90,21 +90,6 @@ def daterange(d1: date, d2: date):
         cur += timedelta(days=1)
 
 
-def parse_sign_and_prayer(text: str):
-    if not text or "/" not in text:
-        return (text or "").strip(), ""
-    a, b = text.split("/", 1)
-    return a.strip(), b.strip()
-
-
-def combine_sign_prayer(sig: str, pray: str) -> str:
-    sig = (sig or "").strip()
-    pray = (pray or "").strip()
-    if sig and pray:
-        return f"{sig}/{pray}"
-    return sig or pray or ""
-
-
 # =========================
 # 구글 시트 연동
 # =========================
@@ -138,9 +123,10 @@ class GoogleSheetsStorage:
         self.ws = ws
 
     def _empty_df(self, start: date, end: date) -> pd.DataFrame:
+        # ✅ ds 미정의 버그 수정: d.isoformat() 사용
         return pd.DataFrame(
             [
-                {"날짜": ds, "QT 시작": "", "QT 종료": "", "완료": False, "나의 묵상 기도": ""}
+                {"날짜": d.isoformat(), "QT 시작": "", "QT 종료": "", "완료": False, "나의 묵상 기도": ""}
                 for d in daterange(start, end)
             ]
         )
@@ -172,11 +158,14 @@ class GoogleSheetsStorage:
                             "QT 시작": r.get("start_time", "") or "",
                             "QT 종료": r.get("end_time", "") or "",
                             "완료": str(r.get("completed", "0")) == "1",
-                            "나의 묵상 기도": (r.get("prayer_note") or r.get("signature") or "")
+                            # ✅ 앞으로는 prayer_note만 사용
+                            # ✅ 과거 데이터(서명 칸에 들어간 값)도 보여주기 위해 fallback 유지
+                            "나의 묵상 기도": (r.get("prayer_note") or r.get("signature") or ""),
                         }
                     )
                 else:
-                    rows.append({"날짜": ds, "QT 시작": "", "QT 종료": "", "완료": False, "확인 서명/나의 묵상 기도": ""})
+                    # ✅ 컬럼명 통일(예전 키 남아있던 것 수정)
+                    rows.append({"날짜": ds, "QT 시작": "", "QT 종료": "", "완료": False, "나의 묵상 기도": ""})
 
             return pd.DataFrame(rows)
         except Exception:
@@ -321,10 +310,14 @@ with st.container(border=True):
         storage.upsert_one(uid, day_str, completed=not is_done)
         st.rerun()
 
+    # ✅ 라벨 변경 완료
     memo = st.text_input("경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.")
+
+    # ✅ 이제부터는 prayer_note 칸에만 저장 (서명 분리 제거)
     if st.button("기록 저장하기", use_container_width=True, type="primary"):
-        sig, pray = parse_sign_and_prayer(memo)
-        storage.upsert_one(uid, day_str, signature=sig, prayer_note=pray)
+        memo_clean = (memo or "").strip()
+        # signature는 더 이상 사용하지 않으므로 빈 값으로 정리(선택사항이지만 깔끔함)
+        storage.upsert_one(uid, day_str, signature="", prayer_note=memo_clean)
         st.success("저장되었습니다!")
         st.rerun()
 
