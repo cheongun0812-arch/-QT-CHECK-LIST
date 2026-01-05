@@ -140,7 +140,7 @@ class GoogleSheetsStorage:
     def _empty_df(self, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame(
             [
-                {"날짜": d.isoformat(), "QT 시작": "", "QT 종료": "", "완료": False, "확인 서명/나의 묵상 기도": ""}
+                {"날짜": ds, "QT 시작": "", "QT 종료": "", "완료": False, "나의 묵상 기도": ""}
                 for d in daterange(start, end)
             ]
         )
@@ -172,7 +172,7 @@ class GoogleSheetsStorage:
                             "QT 시작": r.get("start_time", "") or "",
                             "QT 종료": r.get("end_time", "") or "",
                             "완료": str(r.get("completed", "0")) == "1",
-                            "확인 서명/나의 묵상 기도": combine_sign_prayer(r.get("signature", ""), r.get("prayer_note", "")),
+                            "나의 묵상 기도": combine_sign_prayer(r.get("signature", ""), r.get("prayer_note", "")),
                         }
                     )
                 else:
@@ -321,7 +321,7 @@ with st.container(border=True):
         storage.upsert_one(uid, day_str, completed=not is_done)
         st.rerun()
 
-    memo = st.text_input("서명/기도제목 (예: 홍길동/감사합니다)")
+    memo = st.text_input("경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.")
     if st.button("기록 저장하기", use_container_width=True, type="primary"):
         sig, pray = parse_sign_and_prayer(memo)
         storage.upsert_one(uid, day_str, signature=sig, prayer_note=pray)
