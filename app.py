@@ -763,7 +763,7 @@ def admin_dashboard():
 # -------------------------
 # 앱 시작
 # -------------------------
-st.set_page_config(page_title=APP_TITLE, layout="wide")
+st.set_page_config(page_title="Ye-eun's scent created with Ju-manna", layout="wide")
 st.sidebar.caption(f"build: {APP_BUILD}")
 
 # --- Responsive UI (PC/Mobile) ---
@@ -827,8 +827,8 @@ if not storage:
     st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
     st.stop()
 
-st.title(f"✨ {APP_TITLE}")
-st.caption(VERSE_TEXT)
+st.title("✨ Ye-eun's scent created with Ju-manna")
+st.caption("Ye-eun, who is so beautiful in God's eyes, shall we take a step further into the depths of grace with Ju-manna today?")
 
 mode = st.radio("모드 선택", ["성도님(기록하기)", "관리자(대시보드)"], horizontal=True)
 
