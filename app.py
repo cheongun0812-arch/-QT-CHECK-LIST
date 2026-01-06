@@ -906,7 +906,7 @@ total_cnt = len(df) if len(df) > 0 else 1
 progress = done_cnt / total_cnt
 
 with col_ach:
-    st.metric("이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
+    st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
     st.progress(progress)
 
 # 공유 링크 패널(자동 숨김 + 우측 아이콘 토글)
