@@ -827,8 +827,8 @@ if not storage:
     st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
     st.stop()
 
-st.title("✨ Ye-eun's scent created with Ju-manna")
-st.caption("Ye-eun, who is so beautiful in God's eyes, shall we take a step further into the depths of grace with Ju-manna today?")
+st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
+st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
 
 mode = st.radio("모드 선택", ["성도님(기록하기)", "관리자(대시보드)"], horizontal=True)
 
