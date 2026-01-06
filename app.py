@@ -773,7 +773,7 @@ st.markdown(
 /* Base (desktop/tablet) */
 html, body, [class*="css"] { font-size: 16px; }
 h1 { 
-  font-size: 1.25rem !important;
+  font-size: 1.4rem !important;
   line-height: 1.2 !important;
   margin-bottom: 0.25rem !important;
 }
