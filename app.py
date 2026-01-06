@@ -787,7 +787,16 @@ with st.container(border=True):
 
     if "picked_day" not in st.session_state:
         st.session_state["picked_day"] = today_kst()
-    picked_day = st.date_input("날짜 선택", value=st.session_state["picked_day"], key="picked_day")
+
+    # picked_day는 '기록 확인(주간)'에서도 공유해서 사용합니다.
+    # 데이터가 없어도 성도님들이 주 단위로 앞/뒤를 탐색할 수 있도록
+    # 상한(max_value)은 두지 않고, 하한(min_value)만 둡니다.
+    picked_day = st.date_input(
+        "날짜 선택",
+        value=st.session_state["picked_day"],
+        key="picked_day",
+        min_value=START,
+    )
     day_str = picked_day.isoformat()
 
     role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
@@ -834,23 +843,27 @@ show_all = st.toggle("전체 보기 (한 달 전체)", value=False)
 if show_all:
     render_qt_table_html(df)
 else:
+    def shift_week(delta_days: int):
+        """주간 탐색: 데이터 유무와 관계없이 이전/다음 주 표를 보여줍니다.
+        - 하한은 START로만 제한
+        - 상한(END)은 제한하지 않음 (미래 주도 빈 값으로 표 노출)
+        """
+        anchor_local = st.session_state.get("picked_day", today_kst())
+        new_day = anchor_local + timedelta(days=delta_days)
+        if new_day < START:
+            new_day = START
+        st.session_state["picked_day"] = new_day
+
     anchor = st.session_state.get("picked_day", today_kst())
     wk_start = week_start_monday(anchor)
     wk_end = wk_start + timedelta(days=6)
 
-    wk_start_in = clamp_date(wk_start, START, END)
-    wk_end_in = clamp_date(wk_end, START, END)
-
     nav1, nav2, _ = st.columns([1, 1, 2])
     with nav1:
-        if st.button("⬅️ 이전 주", use_container_width=True):
-            st.session_state["picked_day"] = clamp_date(anchor - timedelta(days=7), START, END)
-            st.rerun()
+        st.button("⬅️ 이전 주", use_container_width=True, on_click=shift_week, args=(-7,))
     with nav2:
-        if st.button("다음 주 ➡️", use_container_width=True):
-            st.session_state["picked_day"] = clamp_date(anchor + timedelta(days=7), START, END)
-            st.rerun()
+        st.button("다음 주 ➡️", use_container_width=True, on_click=shift_week, args=(+7,))
 
-    st.caption(f"표시 기간: {wk_start_in.isoformat()} ~ {wk_end_in.isoformat()} (월~일)")
-    df_week = df[(df["날짜"] >= wk_start_in.isoformat()) & (df["날짜"] <= wk_end_in.isoformat())].copy()
+    st.caption(f"표시 기간: {wk_start.isoformat()} ~ {wk_end.isoformat()} (월~일)")
+    df_week = df[(df["날짜"] >= wk_start.isoformat()) & (df["날짜"] <= wk_end.isoformat())].copy()
     render_qt_table_html(df_week)
