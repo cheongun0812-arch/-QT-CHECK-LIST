@@ -474,6 +474,7 @@ class GoogleSheetsStorage:
         self._ensure_schema()
         self._refresh_col_index()
 
+        # 기존 행 찾기 (uid+day)
         rows = self.ws.get_all_records()
         df = pd.DataFrame(rows) if rows else pd.DataFrame()
 
@@ -481,7 +482,7 @@ class GoogleSheetsStorage:
         if not df.empty and "uid" in df.columns and "day" in df.columns:
             match = df[(df["uid"].astype(str) == str(uid)) & (df["day"].astype(str) == str(day))]
             if not match.empty:
-                row_idx = match.index[0] + 2
+                row_idx = int(match.index[0]) + 2  # header=1, data starts at row 2
 
         now_iso = now_kst().isoformat()
 
@@ -500,11 +501,7 @@ class GoogleSheetsStorage:
                 return ""
             return str(v).strip()
 
-        def set_cell(r, col, val):
-            c = self.col_idx.get(col)
-            if c:
-                self.ws.update_cell(r, c, val)
-
+        # 없으면 새 행 추가
         if row_idx == -1:
             header = self.ws.row_values(1) or self.RECORDS_REQUIRED
             new_row = []
@@ -518,6 +515,7 @@ class GoogleSheetsStorage:
                 else:
                     new_row.append("")
             self.ws.append_row(new_row)
+            # 새로 append된 마지막 행 번호
             row_idx = len(self.ws.get_all_values())
 
         # 프로필도 함께 저장(이름이 있을 때만)
@@ -529,14 +527,25 @@ class GoogleSheetsStorage:
             except Exception:
                 pass
 
+        # 여러 셀을 한 번에 업데이트(update_cell 반복 호출 방지)
+        cells = []
+
+        def queue_cell(col, val):
+            c = self.col_idx.get(col)
+            if not c:
+                return
+            cells.append(gspread.Cell(row_idx, c, str(val)))
+
         for k, v in kwargs.items():
             if k in self.col_idx:
-                set_cell(row_idx, k, norm_value(k, v))
+                queue_cell(k, norm_value(k, v))
 
-        set_cell(row_idx, "uid", str(uid))
-        set_cell(row_idx, "day", str(day))
-        set_cell(row_idx, "updated_at", now_iso)
+        queue_cell("uid", str(uid))
+        queue_cell("day", str(day))
+        queue_cell("updated_at", now_iso)
 
+        if cells:
+            self.ws.update_cells(cells, value_input_option="USER_ENTERED")
 
 @st.cache_resource
 def get_storage() -> Optional[GoogleSheetsStorage]:
@@ -696,17 +705,47 @@ if "uid" not in st.query_params:
 
 uid = st.query_params["uid"]
 
-# 월 선택
-month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
-year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
-START, END = month_range(year, month)
-
 # 성도 프로필 자동 불러오기(최초 1회)
 if "profile_loaded" not in st.session_state:
     role0, name0 = storage.get_profile(uid)
     st.session_state["member_role"] = role0 or MEMBER_ROLES[0]
     st.session_state["member_name"] = name0 or ""
     st.session_state["profile_loaded"] = True
+
+# 성도 정보 입력(상단)
+st.markdown("---")
+with st.container(border=True):
+    st.subheader("🙋 성도 정보(1회 입력)")
+    st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/이름/직분이 함께 저장됩니다.")
+
+    col_r, col_n, col_s = st.columns([1.2, 1.8, 1.0])
+    with col_r:
+        cur_role = st.session_state.get("member_role", MEMBER_ROLES[0])
+        idx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
+        st.selectbox("직분", MEMBER_ROLES, index=idx, key="member_role")
+    with col_n:
+        st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
+    with col_s:
+        st.write("")
+        st.write("")
+        if st.button("💾 성도 정보 저장", use_container_width=True):
+            role_clean = normalize_role(st.session_state.get("member_role", ""))
+            name_clean = clamp_20(st.session_state.get("member_name", ""))
+            if not name_clean:
+                st.warning("이름을 입력해 주세요.")
+            else:
+                storage.upsert_profile(uid, role_clean, name_clean)
+                st.success("저장되었습니다! 다음 접속부터 자동으로 불러옵니다.")
+                st.rerun()
+
+    st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
+
+
+# 월 선택
+month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
+year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
+START, END = month_range(year, month)
+
 
 # 월 데이터
 df = storage.load_month(uid, START, END)
@@ -757,17 +796,14 @@ with st.container(border=True):
     c1, c2, c3 = st.columns(3)
     if c1.button("▶ 시작(현재시간)", use_container_width=True):
         storage.upsert_one(uid, day_str, start_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
-        st.cache_data.clear()
         st.rerun()
     if c2.button("■ 종료(현재시간)", use_container_width=True):
         storage.upsert_one(uid, day_str, end_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
-        st.cache_data.clear()
         st.rerun()
 
     is_done = df[df["날짜"] == day_str]["완료"].values[0] if not df[df["날짜"] == day_str].empty else False
     if c3.button("✅ " + ("취소" if is_done else "완료"), use_container_width=True):
         storage.upsert_one(uid, day_str, completed=not is_done, member_role=role_to_save, member_name=name_to_save)
-        st.cache_data.clear()
         st.rerun()
 
     st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
@@ -786,37 +822,9 @@ with st.container(border=True):
             member_name=name_to_save
         )
         st.success("저장되었습니다!")
-        st.cache_data.clear()
         st.rerun()
 
-# 성도 정보 입력(요청 위치: 큐티 체크 리스트 하단)
-st.markdown("---")
-with st.container(border=True):
-    st.subheader("🙋 성도 정보(1회 입력)")
-    st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/이름/직분이 함께 저장됩니다.")
 
-    col_r, col_n, col_s = st.columns([1.2, 1.8, 1.0])
-    with col_r:
-        cur_role = st.session_state.get("member_role", MEMBER_ROLES[0])
-        idx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
-        st.selectbox("직분", MEMBER_ROLES, index=idx, key="member_role")
-    with col_n:
-        st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
-    with col_s:
-        st.write("")
-        st.write("")
-        if st.button("💾 성도 정보 저장", use_container_width=True):
-            role_clean = normalize_role(st.session_state.get("member_role", ""))
-            name_clean = clamp_20(st.session_state.get("member_name", ""))
-            if not name_clean:
-                st.warning("이름을 입력해 주세요.")
-            else:
-                storage.upsert_profile(uid, role_clean, name_clean)
-                st.success("저장되었습니다! 다음 접속부터 자동으로 불러옵니다.")
-                st.cache_data.clear()
-                st.rerun()
-
-    st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
 
 # 기록 확인(기본: 주간, 전체 보기 토글)
 st.markdown("---")
