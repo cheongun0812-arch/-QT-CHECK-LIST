@@ -9,6 +9,9 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
+APP_BUILD = "weeklyfree_v2_2026-01-06"
+
+
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -761,6 +764,62 @@ def admin_dashboard():
 # 앱 시작
 # -------------------------
 st.set_page_config(page_title=APP_TITLE, layout="wide")
+st.sidebar.caption(f"build: {APP_BUILD}")
+
+# --- Responsive UI (PC/Mobile) ---
+st.markdown(
+    """
+<style>
+/* Base (desktop/tablet) */
+html, body, [class*="css"] { font-size: 16px; }
+h1 { font-size: 1.6rem; line-height: 1.2; }
+h2 { font-size: 1.25rem; line-height: 1.25; }
+h3 { font-size: 1.10rem; line-height: 1.25; }
+
+.stButton button {
+  font-size: 0.95rem;
+  padding: 0.45rem 0.75rem;
+}
+
+label, .stMarkdown, .stText, .stCaption, .stRadio, .stSelectbox, .stTextInput, .stDateInput {
+  font-size: 0.95rem;
+}
+
+.block-container { padding-top: 1.0rem; padding-bottom: 2.0rem; }
+
+/* Mobile */
+@media (max-width: 640px) {
+  html, body, [class*="css"] { font-size: 13px; }
+
+  h1 { font-size: 1.25rem; }
+  h2 { font-size: 1.10rem; }
+  h3 { font-size: 1.00rem; }
+
+  .stButton button {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 10px;
+  }
+
+  label, .stMarkdown, .stText, .stCaption { font-size: 0.88rem; }
+
+  .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+
+  div[data-baseweb="select"] > div { min-height: 36px; }
+  input, textarea { font-size: 0.90rem !important; }
+
+  .stDataFrame { overflow-x: auto; }
+}
+
+/* Very small phones */
+@media (max-width: 380px) {
+  html, body, [class*="css"] { font-size: 12.5px; }
+  .stButton button { font-size: 0.82rem; padding: 0.32rem 0.55rem; }
+}
+</style>
+    """,
+    unsafe_allow_html=True
+)
 apply_css()
 
 storage = get_storage()
@@ -922,23 +981,25 @@ show_all = st.toggle("전체 보기 (한 달 전체)", value=False)
 if show_all:
     render_qt_table_html(df)
 else:
+    # ✅ 주간 표시: '월 선택 범위(START~END)'와 무관하게 항상 7일(월~일) 표를 보여줍니다.
+    # - 데이터가 없으면 빈 값으로 표시
+    # - 다른 달/미래 주도 이동 가능
     anchor = st.session_state.get("picked_day", today_kst())
     wk_start = week_start_monday(anchor)
     wk_end = wk_start + timedelta(days=6)
 
-    wk_start_in = clamp_date(wk_start, START, END)
-    wk_end_in = clamp_date(wk_end, START, END)
+    def _shift_week(delta_days: int):
+        a = st.session_state.get("picked_day", today_kst())
+        # 월 범위로 clamp 하지 않음(주간 표는 항상 이동 가능)
+        st.session_state["picked_day"] = a + timedelta(days=delta_days)
 
     nav1, nav2, _ = st.columns([1, 1, 2])
     with nav1:
-        if st.button("⬅️ 이전 주", use_container_width=True):
-            st.session_state["picked_day"] = clamp_date(anchor - timedelta(days=7), START, END)
-            st.rerun()
+        st.button("⬅️ 이전 주", use_container_width=True, on_click=_shift_week, args=(-7,))
     with nav2:
-        if st.button("다음 주 ➡️", use_container_width=True):
-            st.session_state["picked_day"] = clamp_date(anchor + timedelta(days=7), START, END)
-            st.rerun()
+        st.button("다음 주 ➡️", use_container_width=True, on_click=_shift_week, args=(+7,))
 
-    st.caption(f"표시 기간: {wk_start_in.isoformat()} ~ {wk_end_in.isoformat()} (월~일)")
-    df_week = df[(df["날짜"] >= wk_start_in.isoformat()) & (df["날짜"] <= wk_end_in.isoformat())].copy()
+    st.caption(f"표시 기간: {wk_start.isoformat()} ~ {wk_end.isoformat()} (월~일)")
+    # 주간 표는 해당 7일만 로드(없는 날짜는 빈 행 생성)
+    df_week = storage.load_month(uid, wk_start, wk_end)
     render_qt_table_html(df_week)
