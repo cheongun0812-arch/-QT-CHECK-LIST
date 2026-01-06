@@ -888,21 +888,26 @@ with st.container(border=True):
     st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
 
 
-# 월 선택
-month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
+# 월 선택 + 이번 달 달성 (한 줄 2컬럼)
+col_month, col_ach = st.columns([1, 1])
+
+with col_month:
+    month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
+
 year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
 START, END = month_range(year, month)
 
-
-# 월 데이터
+# 월 데이터(월 진행률/전체보기용)
 df = storage.load_month(uid, START, END)
 
 # 진행률
 done_cnt = int(df["완료"].sum()) if not df.empty else 0
 total_cnt = len(df) if len(df) > 0 else 1
 progress = done_cnt / total_cnt
-st.metric("이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
-st.progress(progress)
+
+with col_ach:
+    st.metric("이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
+    st.progress(progress)
 
 # 공유 링크 패널(자동 숨김 + 우측 아이콘 토글)
 share_url = build_share_url(uid)
