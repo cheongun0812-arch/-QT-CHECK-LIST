@@ -772,8 +772,20 @@ st.markdown(
 <style>
 /* Base (desktop/tablet) */
 html, body, [class*="css"] { font-size: 16px; }
-h1 { font-size: 1.6rem; line-height: 1.2; }
-h2 { font-size: 1.25rem; line-height: 1.25; }
+h1 { 
+  font-size: 1.25rem !important;
+  line-height: 1.2 !important;
+  margin-bottom: 0.25rem !important;
+}
+
+/* 모바일에서는 더 작게 */
+@media (max-width: 640px) {
+  h1 {
+    font-size: 1.05rem !important;
+  }
+}
+
+h2 { font-size: 1.15rem; line-height: 1.25; }
 h3 { font-size: 1.10rem; line-height: 1.25; }
 
 .stButton button {
@@ -791,7 +803,7 @@ label, .stMarkdown, .stText, .stCaption, .stRadio, .stSelectbox, .stTextInput, .
 @media (max-width: 640px) {
   html, body, [class*="css"] { font-size: 13px; }
 
-  h1 { font-size: 1.25rem; }
+  h1 { font-size: 1.2rem; }
   h2 { font-size: 1.10rem; }
   h3 { font-size: 1.00rem; }
 
