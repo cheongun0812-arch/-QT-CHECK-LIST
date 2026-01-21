@@ -37,7 +37,7 @@ SHEET_RECORDS = "qti_records"  # 일별 기록
 SHEET_USERS = "qti_users"      # uid별 성도 정보(직분/이름)
 SHEET_PRAYERS = "intercessory_prayers"  # 중보기도 요청(Pray together in the Lord)
 
-MEMBER_ROLES = ["평신도", "서리집사", "안수집사", "권사", "장로", "강도사", "목사", "기타"]
+MEMBER_ROLES = ["평신도", "서리집사", "안수집사", "권사", "장로", "전도사", "강도사", "목사", "기타"]
 
 KST = ZoneInfo("Asia/Seoul")
 ADMIN_KEY_FALLBACK = "yeiun1234"  # secrets에 없을 때만 fallback
@@ -1267,7 +1267,7 @@ if "pray_public" not in st.session_state:
     st.session_state["pray_public"] = False
 
 with st.expander("🙏 함께 기도해요(Pray together in the Lord))", expanded=False):
-    st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
+    st.caption("여기에 남긴 기도 제목은 목회자가 수시로 확인하고 상황에 따라 공동체가 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
 
     # 저장 결과 메시지(한 번만 노출)
     err = st.session_state.pop("pray_error", "")
@@ -1278,7 +1278,7 @@ with st.expander("🙏 함께 기도해요(Pray together in the Lord))", expande
         st.success(ok)
 
     st.text_input("기도 제목(필수, 50자 이내)", max_chars=50, placeholder="예) 가족 구원을 위해", key="pray_title")
-    st.text_area("기도 내용(선택, 300자 이내)", height=120, placeholder="자유롭게 적어주세요.", key="pray_content")
-    st.checkbox("공동체 중보 요청으로 표시(필요 시 공지/공동체 기도 참여 요청에 활용)", key="pray_public")
+    st.text_area("기도 내용(선택, 500자 이내)", height=120, placeholder="자유롭게 적어주세요.", key="pray_content")
+    st.checkbox("공동체 중보 요청으로 표시(필요 시 공동체 기도 참여 요청에 활용)", key="pray_public")
 
     st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_pray_request)
