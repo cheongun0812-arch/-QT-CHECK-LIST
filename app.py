@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-21_prayer_v2"
+APP_BUILD = "weeklyfree_v2_2026-01-21_layout_v1"
 
 
 import pandas as pd
@@ -1058,79 +1058,62 @@ if "profile_loaded" not in st.session_state:
     st.session_state["member_name"] = name0 or ""
     st.session_state["profile_loaded"] = True
 
-# 성도 정보 입력(상단)
+# 성도 정보 + 월 선택/주소 (1행 2열 레이아웃)
 st.markdown("---")
-with st.container(border=True):
-    st.subheader("🙋 성도 정보(1회 입력)")
-    st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/이름/직분이 함께 저장됩니다.")
+col_info, col_panel = st.columns([1, 1], gap="large")
 
-    col_r, col_n, col_s = st.columns([1.2, 1.8, 1.0])
-    with col_r:
-        cur_role = st.session_state.get("member_role", MEMBER_ROLES[0])
-        idx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
-        st.selectbox("직분", MEMBER_ROLES, index=idx, key="member_role")
-    with col_n:
-        st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
-    with col_s:
-        st.write("")
-        st.write("")
-        if st.button("💾 성도 정보 저장", use_container_width=True):
-            role_clean = normalize_role(st.session_state.get("member_role", ""))
-            name_clean = clamp_20(st.session_state.get("member_name", ""))
-            if not name_clean:
-                st.warning("이름을 입력해 주세요.")
-            else:
-                storage.upsert_profile(uid, role_clean, name_clean)
-                st.success("저장되었습니다! 다음 접속부터 자동으로 불러옵니다.")
-                st.rerun()
+with col_info:
+    with st.container(border=True):
+        st.subheader("🙋 성도 정보(1회 입력)")
+        st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/이름/직분이 함께 저장됩니다.")
 
-    st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
+        col_r, col_n, col_s = st.columns([1.2, 1.8, 1.0])
+        with col_r:
+            cur_role = st.session_state.get("member_role", MEMBER_ROLES[0])
+            idx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
+            st.selectbox("직분", MEMBER_ROLES, index=idx, key="member_role")
+        with col_n:
+            st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
+        with col_s:
+            st.write("")
+            st.write("")
+            if st.button("💾 성도 정보 저장", use_container_width=True):
+                role_clean = normalize_role(st.session_state.get("member_role", ""))
+                name_clean = clamp_20(st.session_state.get("member_name", ""))
+                if not name_clean:
+                    st.warning("이름을 입력해 주세요.")
+                else:
+                    storage.upsert_profile(uid, role_clean, name_clean)
+                    st.success("저장되었습니다! 다음 접속부터 자동으로 불러옵니다.")
+                    st.rerun()
 
+        st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
 
-# 월 선택 + 이번 달 달성 (한 줄 2컬럼)
-col_month, col_ach = st.columns([1, 1])
+with col_panel:
+    with st.container(border=True):
+        st.subheader("📆 월 선택 · 달성 · 내 기록지 주소")
 
-with col_month:
-    month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
+        month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
+        year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
+        START, END = month_range(year, month)
 
-year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
-START, END = month_range(year, month)
+        # 월 데이터(월 진행률/전체보기용)
+        df = storage.load_month(uid, START, END)
 
-# 월 데이터(월 진행률/전체보기용)
-df = storage.load_month(uid, START, END)
+        done_cnt = int(df["완료"].sum()) if not df.empty else 0
+        total_cnt = len(df) if len(df) > 0 else 1
+        progress = done_cnt / total_cnt
 
-# 진행률
-done_cnt = int(df["완료"].sum()) if not df.empty else 0
-total_cnt = len(df) if len(df) > 0 else 1
-progress = done_cnt / total_cnt
+        st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
+        st.progress(progress)
 
-with col_ach:
-    st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
-    st.progress(progress)
+        share_url = build_share_url(uid)
+        with st.expander("📌 내 기록지 주소 저장하기", expanded=False):
+            st.write("이 주소를 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 해두시면 편합니다.")
+            st.code(share_url)
+            if "<YOUR-APP>" in share_url:
+                st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
 
-# 공유 링크 패널(자동 숨김 + 우측 아이콘 토글)
-share_url = build_share_url(uid)
-st.markdown(
-    """
-    <div id="sharePanel">
-      <div id="shareHeader">
-        <div id="shareTitle">📌 내 기록지 주소 저장하기</div>
-        <button id="shareToggleBtn" type="button">▴</button>
-      </div>
-      <div id="shareContent">
-        <div style="font-weight:800; margin-bottom:8px;">
-          이 주소를 꼭 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 하세요!
-        </div>
-    """,
-    unsafe_allow_html=True,
-)
-st.code(share_url)
-if "<YOUR-APP>" in share_url:
-    st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
-st.markdown("</div></div>", unsafe_allow_html=True)
-inject_share_panel_js()
-
-st.markdown("---")
 
 # 오늘 기록
 with st.container(border=True):
