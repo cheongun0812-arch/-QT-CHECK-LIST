@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-21_layout_v2"
+APP_BUILD = "weeklyfree_v2_2026-01-21_layout_v3_width"
 
 
 import pandas as pd
@@ -984,7 +984,7 @@ label, .stMarkdown, .stText, .stCaption, .stRadio, .stSelectbox, .stTextInput, .
   font-size: 0.95rem;
 }
 
-.block-container { padding-top: 0.6rem; padding-bottom: 1.4rem; max-width: 1100px; }
+.block-container { padding-top: 0.6rem; padding-bottom: 1.4rem; max-width: calc(1100px + 100mm); }
 
 hr { margin: 0.6rem 0 !important; }
 h2, h3 { margin-top: 0.4rem !important; margin-bottom: 0.25rem !important; }
