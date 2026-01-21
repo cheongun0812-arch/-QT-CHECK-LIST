@@ -1156,10 +1156,10 @@ with col_today:
             
             st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
         memo = st.text_area(
-            "경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
+            "경건의 시간 하나님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
             height=85,
             max_chars=50,
-            placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
+            placeholder="예) 주님, 오늘 주신 말씀 붙잡고 순종할 힘을 주세요.",
             key="memo_50",
         )
         if st.button("묵상 기도 저장", use_container_width=True, type="primary"):
