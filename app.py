@@ -1218,7 +1218,7 @@ with col_check:
 st.markdown("---")
 share_url = build_share_url(uid)
 with st.container(border=True):
-    st.subheader("📌 Save my QT access address (큐티 접속 주소 저장)")
+    st.subheader("📌 나의 큐티 접속 주소 저장")
     cL, cR = st.columns([1.2, 2.0], gap="small")
     with cL:
         st.caption("이 주소를 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 해 주세요.\n(다음 접속부터 이 주소로 바로 들어오면 됩니다.)")
@@ -1274,7 +1274,7 @@ if "pray_content" not in st.session_state:
 if "pray_public" not in st.session_state:
     st.session_state["pray_public"] = False
 
-with st.expander("🙏 Pray together in the Lord (함께 기도해요)", expanded=False):
+with st.expander("🙏 함께 기도해요(Pray together in the Lord))", expanded=False):
     st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
 
     # 저장 결과 메시지(한 번만 노출)
