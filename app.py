@@ -1152,6 +1152,8 @@ with col_today:
             storage.upsert_one(uid, day_str, completed=not is_done, member_role=role_to_save, member_name=name_to_save)
             st.rerun()
 
+
+            
             st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
         memo = st.text_area(
             "경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
