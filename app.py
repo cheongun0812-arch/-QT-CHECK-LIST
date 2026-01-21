@@ -1218,7 +1218,7 @@ with col_check:
 st.markdown("---")
 share_url = build_share_url(uid)
 with st.container(border=True):
-    st.subheader("📌 나의 큐티 접속 주소 저장")
+    st.subheader("📌 나의 QT 접속 주소")
     cL, cR = st.columns([1.2, 2.0], gap="small")
     with cL:
         st.caption("이 주소를 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 해 주세요.\n(다음 접속부터 이 주소로 바로 들어오면 됩니다.)")
