@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-21_prayer_v1"
+APP_BUILD = "weeklyfree_v2_2026-01-21_prayer_v2"
 
 
 import pandas as pd
@@ -1179,39 +1179,91 @@ with st.container(border=True):
 
 
 st.markdown("---")
-with st.container(border=True):
-    st.subheader("🙏 Pray together in the Lord (함께 기도해요)")
-    st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
+# --- Pray together in the Lord (중보기도 요청) ---
+# 위젯 키(pray_*)는 여기서만 사용합니다. 초기화는 "존재할 때만" 설정합니다(위젯 충돌 방지).
+if "pray_title" not in st.session_state:
+    st.session_state["pray_title"] = ""
+if "pray_content" not in st.session_state:
+    st.session_state["pray_content"] = ""
+if "pray_is_public" not in st.session_state:
+    st.session_state["pray_is_public"] = True
+
+def _submit_prayer_request():
+    """버튼 콜백: 중보기도 요청 저장 + 입력값 초기화(위젯 키는 콜백에서만 변경)."""
+    s = get_storage()
+    if not s:
+        st.session_state["pray_error"] = "구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요."
+        return
+
+    uid_local = ""
+    try:
+        uid_local = st.query_params.get("uid", "")
+    except Exception:
+        uid_local = ""
 
     role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
     name_to_save = clamp_20(st.session_state.get("member_name", ""))
 
-    pt = st.text_input("기도 제목(필수, 50자 이내)", max_chars=50, placeholder="예) 가족 구원을 위해", key="pray_title")
-    pc = st.text_area("기도 내용(선택, 300자 이내)", height=120, max_chars=300, placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.", key="pray_content")
-    pub = st.checkbox("공동체 중보 요청으로 표시(필요 시 교회 공지로 함께 기도 요청될 수 있어요)", value=True, key="pray_is_public")
+    title = clamp_50(st.session_state.get("pray_title", ""))
+    content = clamp_300(st.session_state.get("pray_content", ""))
+    is_public = bool(st.session_state.get("pray_is_public", True))
 
-    if st.button("🙏 중보기도 요청 저장", use_container_width=True):
-        if not name_to_save:
-            st.warning("먼저 '성도 정보(이름)'를 저장해 주세요.")
-        elif not (pt or "").strip():
-            st.warning("기도 제목을 입력해 주세요.")
-        else:
-            # 오늘 선택된 날짜를 연결 정보로 함께 저장(선택)
-            linked = st.session_state.get("picked_day", today_kst()).isoformat()
-            storage.insert_prayer_request(
-                uid=str(uid),
-                member_role=role_to_save,
-                member_name=name_to_save,
-                prayer_title=pt,
-                prayer_content=pc,
-                is_public=bool(pub),
-                linked_day=linked,
-            )
-            st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
-            # 입력값 초기화
-            st.session_state["pray_title"] = ""
-            st.session_state["pray_content"] = ""
-            st.rerun()
+    # QT 날짜(선택): 현재 선택된 날짜를 연결
+    linked_day = ""
+    try:
+        d = st.session_state.get("picked_day", today_kst())
+        linked_day = d.isoformat() if hasattr(d, "isoformat") else str(d)
+    except Exception:
+        linked_day = ""
+
+    if not name_to_save:
+        st.session_state["pray_error"] = "먼저 상단에서 성도 이름을 입력하고 ‘💾 성도 정보 저장’을 눌러주세요."
+        return
+    if not title:
+        st.session_state["pray_error"] = "기도 제목은 필수입니다. (최대 50자)"
+        return
+
+    try:
+        s.insert_prayer_request(
+            uid=str(uid_local),
+            member_role=role_to_save,
+            member_name=name_to_save,
+            prayer_title=title,
+            prayer_content=content,
+            is_public=is_public,
+            linked_day=linked_day,
+        )
+        st.session_state["pray_notice"] = "기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏"
+        # 입력값 초기화(위젯 키는 콜백에서만 변경해야 안전합니다)
+        st.session_state["pray_title"] = ""
+        st.session_state["pray_content"] = ""
+        st.session_state["pray_is_public"] = True
+    except Exception:
+        st.session_state["pray_error"] = "저장 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+
+with st.container(border=True):
+    st.subheader("🙏 Pray together in the Lord (함께 기도해요)")
+    st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
+
+    # 저장 결과 메시지(한 번만 노출)
+    err = st.session_state.pop("pray_error", "")
+    ok = st.session_state.pop("pray_notice", "")
+    if err:
+        st.error(err)
+    elif ok:
+        st.success(ok)
+
+    st.text_input("기도 제목(필수, 50자 이내)", max_chars=50, placeholder="예) 가족 구원을 위해", key="pray_title")
+    st.text_area(
+        "기도 내용(선택, 300자 이내)",
+        height=120,
+        max_chars=300,
+        placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
+        key="pray_content",
+    )
+    st.checkbox("공동체 중보 요청으로 표시(필요 시 교회 공지로 함께 기도 요청될 수 있어요)", key="pray_is_public")
+
+    st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer_request)
 
 
 # 기록 확인(기본: 주간, 전체 보기 토글)
