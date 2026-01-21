@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-21_layout_v3_width"
+APP_BUILD = "weeklyfree_v2_2026-01-22_fix_times_pray_swap"
 
 
 import pandas as pd
@@ -264,7 +264,16 @@ def apply_css():
           table.qti-table th:nth-child(4), table.qti-table td:nth-child(4) { width: 70px; }
           table.qti-table th:nth-child(5), table.qti-table td:nth-child(5) { width: auto; }
           table.qti-table tbody tr:last-child td { border-bottom: none; }
-        </style>
+        
+          /* mini metrics (record confirm) */
+          .qti-confirm [data-testid="stMetricValue"] {
+            font-size: 1.15rem !important;
+            line-height: 1.1 !important;
+          }
+          .qti-confirm [data-testid="stMetricLabel"] {
+            font-size: 0.90rem !important;
+          }
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -1141,20 +1150,37 @@ with col_today:
         else:
             start_t, end_t, is_done = "", "", False
 
+        # 즉시 반영(구글시트 반영 지연 대비): 같은 날짜에 대해 세션에 저장된 최신 값이 있으면 우선 표시
+        if st.session_state.get("local_time_day") == day_str:
+            start_t = start_t or str(st.session_state.get("local_start_time", "")).strip()
+            end_t = end_t or str(st.session_state.get("local_end_time", "")).strip()
+
         b1, b2, b3 = st.columns(3, gap="small")
         if b1.button("▶ 시작(현재시간)", use_container_width=True):
-            storage.upsert_one(uid, day_str, start_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
+            t = now_hhmm_kst()
+            st.session_state["local_time_day"] = day_str
+            st.session_state["local_start_time"] = t
+            storage.upsert_one(uid, day_str, start_time=t, member_role=role_to_save, member_name=name_to_save)
             st.rerun()
         if b2.button("■ 종료(현재시간)", use_container_width=True):
-            storage.upsert_one(uid, day_str, end_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
+            t = now_hhmm_kst()
+            st.session_state["local_time_day"] = day_str
+            st.session_state["local_end_time"] = t
+            storage.upsert_one(uid, day_str, end_time=t, member_role=role_to_save, member_name=name_to_save)
             st.rerun()
         if b3.button("✅ " + ("취소" if is_done else "완료"), use_container_width=True):
             storage.upsert_one(uid, day_str, completed=not is_done, member_role=role_to_save, member_name=name_to_save)
             st.rerun()
 
+        st.markdown('<div class="qti-confirm">', unsafe_allow_html=True)
+        st.markdown("### 👀 기록 확인")
+        k1, k2, k3 = st.columns(3, gap="small")
+        k1.metric(label="QT 시작", value=start_t or "—")
+        k2.metric(label="QT 종료", value=end_t or "—")
+        k3.metric(label="완료", value=("✅" if is_done else "—"))
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            
-            st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
+        st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
         memo = st.text_area(
             "경건의 시간 하나님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
             height=85,
@@ -1205,23 +1231,7 @@ with col_check:
 
 
 # -------------------------
-# 큐티 접속 주소(하단, 가로로 길게)
-# -------------------------
-st.markdown("---")
-share_url = build_share_url(uid)
-with st.container(border=True):
-    st.subheader("📌 나의 QT 접속 주소")
-    cL, cR = st.columns([1.2, 2.0], gap="small")
-    with cL:
-        st.caption("이 주소를 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 해 주세요.\n(다음 접속부터 이 주소로 바로 들어오면 됩니다.)")
-    with cR:
-        st.code(share_url)
-        if "<YOUR-APP>" in share_url:
-            st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
-
-
-# -------------------------
-# Pray together in the Lord (중보기도 요청) - 마지막 위치
+# Pray together in the Lord (중보기도 요청)
 # -------------------------
 st.markdown("---")
 
@@ -1229,6 +1239,7 @@ def _reset_pray_form():
     st.session_state["pray_title"] = ""
     st.session_state["pray_content"] = ""
     st.session_state["pray_public"] = False
+
 
 def _submit_pray_request():
     title = clamp_50(st.session_state.get("pray_title", ""))
@@ -1258,6 +1269,7 @@ def _submit_pray_request():
     except Exception:
         st.session_state["pray_error"] = "저장 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
+
 # 위젯 키(pray_*) 기본값(처음 1회)
 if "pray_title" not in st.session_state:
     st.session_state["pray_title"] = ""
@@ -1266,7 +1278,8 @@ if "pray_content" not in st.session_state:
 if "pray_public" not in st.session_state:
     st.session_state["pray_public"] = False
 
-with st.expander("🙏 함께 기도해요(Pray together in the Lord))", expanded=False):
+with st.container(border=True):
+    st.subheader("🙏 함께 기도해요(Pray together in the Lord)")
     st.caption("여기에 남긴 기도 제목은 목회자가 수시로 확인하고 상황에 따라 공동체가 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
 
     # 저장 결과 메시지(한 번만 노출)
@@ -1278,7 +1291,23 @@ with st.expander("🙏 함께 기도해요(Pray together in the Lord))", expande
         st.success(ok)
 
     st.text_input("기도 제목(필수, 50자 이내)", max_chars=50, placeholder="예) 가족 구원을 위해", key="pray_title")
-    st.text_area("기도 내용(선택, 500자 이내)", height=120, placeholder="자유롭게 적어주세요.", key="pray_content")
+    st.text_area("기도 내용(선택, 500자 이내)", height=110, placeholder="자유롭게 적어주세요.", key="pray_content")
     st.checkbox("공동체 중보 요청으로 표시(필요 시 공동체 기도 참여 요청에 활용)", key="pray_public")
 
     st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_pray_request)
+
+
+# -------------------------
+# 큐티 접속 주소(하단, 가로로 길게)
+# -------------------------
+st.markdown("---")
+share_url = build_share_url(uid)
+with st.container(border=True):
+    st.subheader("📌 나의 QT 접속 주소")
+    cL, cR = st.columns([1.2, 2.0], gap="small")
+    with cL:
+        st.caption("이 주소를 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 해 주세요.\n(다음 접속부터 이 주소로 바로 들어오면 됩니다.)")
+    with cR:
+        st.code(share_url)
+        if "<YOUR-APP>" in share_url:
+            st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
