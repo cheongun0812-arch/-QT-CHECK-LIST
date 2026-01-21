@@ -973,7 +973,7 @@ h1 {
 }
 
 h2 { font-size: 1.15rem; line-height: 1.25; }
-h3 { font-size: 1.10rem; line-height: 1.25; }
+h3 { font-size: 0.95rem; line-height: 1.25; }   /* 더 줄임 */
 
 .stButton button {
   font-size: 0.95rem;
@@ -996,7 +996,7 @@ h2, h3 { margin-top: 0.4rem !important; margin-bottom: 0.25rem !important; }
 
   h1 { font-size: 1.2rem; }
   h2 { font-size: 1.10rem; }
-  h3 { font-size: 1.00rem; }
+  h3 { font-size: 0.95rem; }
 
   .stButton button {
     font-size: 0.85rem;
