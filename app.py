@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-06"
+APP_BUILD = "weeklyfree_v2_2026-01-21_prayer_v1"
 
 
 import pandas as pd
@@ -35,6 +35,7 @@ SUPPORTED_MONTHS = [(2026, 1, "2026년 1월"), (2026, 2, "2026년 2월"), (2026,
 
 SHEET_RECORDS = "qti_records"  # 일별 기록
 SHEET_USERS = "qti_users"      # uid별 성도 정보(직분/이름)
+SHEET_PRAYERS = "intercessory_prayers"  # 중보기도 요청(Pray together in the Lord)
 
 MEMBER_ROLES = ["평신도", "서리집사", "안수집사", "권사", "장로", "강도사", "목사", "기타"]
 
@@ -70,6 +71,14 @@ def clamp_50(s: str) -> str:
 
 def clamp_20(s: str) -> str:
     return (s or "").strip()[:20]
+
+
+def clamp_300(s: str) -> str:
+    return (s or "").strip()[:300]
+
+
+def clamp_1000(s: str) -> str:
+    return (s or "").strip()[:1000]
 
 
 def normalize_role(s: str) -> str:
@@ -284,6 +293,11 @@ class GoogleSheetsStorage:
         "signature", "prayer_note", "updated_at"
     ]
     USERS_REQUIRED = ["uid", "member_role", "member_name", "updated_at"]
+    PRAYERS_REQUIRED = [
+        "uid", "member_role", "member_name", "saints_info",
+        "prayer_title", "prayer_content", "is_public",
+        "created_at", "linked_day"
+    ]
 
     def __init__(self, spreadsheet_id: str, worksheet_records: str, sa_json: dict):
         scopes = [
@@ -305,12 +319,20 @@ class GoogleSheetsStorage:
         except Exception:
             self.ws_users = self.sh.add_worksheet(title="users", rows=2000, cols=10)
 
+        # prayers worksheet
+        try:
+            self.ws_prayers = self.sh.worksheet(SHEET_PRAYERS)
+        except Exception:
+            self.ws_prayers = self.sh.add_worksheet(title=SHEET_PRAYERS, rows=3000, cols=20)
+
         # schema/index cache (process-wide via st.cache_resource)
         self._schema_verified = False
         self._records_header: list[str] = []
         self._users_header: list[str] = []
+        self._prayers_header: list[str] = []
         self.col_idx: dict[str, int] = {}  # 1-indexed col index for records
         self.users_col_idx: dict[str, int] = {}  # 1-indexed col index for users
+        self.prayers_col_idx: dict[str, int] = {}  # 1-indexed col index for prayers
 
         self._row_index: dict[tuple[str, str], int] = {}  # (uid, day) -> row_idx
         self._index_built_at: float = 0.0
@@ -405,6 +427,33 @@ class GoogleSheetsStorage:
         self._users_header = uhdr
         self._refresh_users_col_index()
 
+        # prayers header
+        phdr = self._call_with_retries(self.ws_prayers.row_values, 1) or []
+        phdr = [str(x).strip() for x in phdr if str(x).strip()]
+
+        if not phdr:
+            phdr = list(self.PRAYERS_REQUIRED)
+            try:
+                if self.ws_prayers.col_count < len(phdr):
+                    self._call_with_retries(self.ws_prayers.add_cols, len(phdr) - self.ws_prayers.col_count)
+            except Exception:
+                pass
+            self._call_with_retries(self.ws_prayers.update, "A1", [phdr])
+        else:
+            pmissing = [c for c in self.PRAYERS_REQUIRED if c not in phdr]
+            if pmissing:
+                new_phdr = phdr + pmissing
+                try:
+                    if self.ws_prayers.col_count < len(new_phdr):
+                        self._call_with_retries(self.ws_prayers.add_cols, len(new_phdr) - self.ws_prayers.col_count)
+                except Exception:
+                    pass
+                self._call_with_retries(self.ws_prayers.update, "A1", [new_phdr])
+                phdr = new_phdr
+
+        self._prayers_header = phdr
+        self._refresh_prayers_col_index()
+
         self._schema_verified = True
 
     def _refresh_col_index(self):
@@ -412,6 +461,9 @@ class GoogleSheetsStorage:
 
     def _refresh_users_col_index(self):
         self.users_col_idx = {name: i + 1 for i, name in enumerate(self._users_header)}
+
+    def _refresh_prayers_col_index(self):
+        self.prayers_col_idx = {name: i + 1 for i, name in enumerate(self._prayers_header)}
 
     # -------------------------
     # Data helpers
@@ -432,6 +484,71 @@ class GoogleSheetsStorage:
             if c not in df_all.columns:
                 df_all[c] = ""
         return df_all[self.RECORDS_REQUIRED]
+
+    # -------------------------
+    # Prayers (intercessory)
+    # -------------------------
+    def fetch_all_prayers_df(self) -> pd.DataFrame:
+        """(관리/목회자용) 중보기도 요청 전체 로드."""
+        self._ensure_schema()
+        rows = self._call_with_retries(self.ws_prayers.get_all_records)
+        dfp = pd.DataFrame(rows)
+        if dfp.empty:
+            return pd.DataFrame(columns=self.PRAYERS_REQUIRED)
+        for c in self.PRAYERS_REQUIRED:
+            if c not in dfp.columns:
+                dfp[c] = ""
+        return dfp[self.PRAYERS_REQUIRED]
+
+    def insert_prayer_request(
+        self,
+        uid: str,
+        member_role: str,
+        member_name: str,
+        prayer_title: str,
+        prayer_content: str,
+        is_public: bool = True,
+        linked_day: str = "",
+    ):
+        """중보기도 요청은 "추가(append)"로만 저장합니다(기록 변경 이력 보존)."""
+        self._ensure_schema()
+        now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+        role = normalize_role(member_role)
+        name = clamp_20(member_name)
+        title = clamp_50(prayer_title)
+        content = clamp_300(prayer_content)
+        saints_info = f"{role} {name} ({uid})".strip()
+        if linked_day:
+            try:
+                linked_day = str(date.fromisoformat(str(linked_day))).strip()
+            except Exception:
+                linked_day = str(linked_day).strip()
+
+        row = []
+        for h in self._prayers_header:
+            if h == "uid":
+                row.append(str(uid))
+            elif h == "member_role":
+                row.append(role)
+            elif h == "member_name":
+                row.append(name)
+            elif h == "saints_info":
+                row.append(saints_info)
+            elif h == "prayer_title":
+                row.append(title)
+            elif h == "prayer_content":
+                row.append(content)
+            elif h == "is_public":
+                row.append("TRUE" if bool(is_public) else "FALSE")
+            elif h == "created_at":
+                row.append(now_iso)
+            elif h == "linked_day":
+                row.append(str(linked_day or ""))
+            else:
+                row.append("")
+
+        self._call_with_retries(self.ws_prayers.append_row, row, value_input_option="USER_ENTERED")
+
 
     # -------------------------
     # Profile (users sheet)
@@ -658,6 +775,14 @@ def cached_all_records_df() -> pd.DataFrame:
     return s.fetch_all_records_df()
 
 
+@st.cache_data(ttl=60)
+def cached_all_prayers_df() -> pd.DataFrame:
+    s = get_storage()
+    if not s:
+        return pd.DataFrame()
+    return s.fetch_all_prayers_df()
+
+
 def require_admin_login() -> bool:
     admin_pw = st.secrets.get("ADMIN_KEY") or st.secrets.get("ADMIN_PASSWORD") or ADMIN_KEY_FALLBACK
 
@@ -691,7 +816,8 @@ def compute_participation(df_all: pd.DataFrame, start: date, end: date) -> Tuple
 
     dfx = df_all.copy()
     dfx = dfx[(dfx["day"] >= start.isoformat()) & (dfx["day"] <= end.isoformat())]
-    dfx = dfx[dfx["completed"].astype(str) == "1"]
+    dfx["completed_bool"] = dfx["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+    dfx = dfx[dfx["completed_bool"]]
     active = len(set(dfx["uid"].astype(str).unique().tolist()))
     rate = (active / total) if total else 0.0
     return active, total, rate
@@ -736,7 +862,7 @@ def admin_dashboard():
 
     # 월 기준 참여일수
     dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
-    dmonth["completed_bool"] = dmonth["completed"].astype(str) == "1"
+    dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
     cnts = dmonth[dmonth["completed_bool"]].groupby("uid", as_index=False)["day"].nunique().rename(columns={"day": "완료일수"})
     merged = prof.merge(cnts, on="uid", how="left")
     merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
@@ -747,6 +873,67 @@ def admin_dashboard():
         use_container_width=True,
         hide_index=True,
     )
+
+
+    st.markdown("---")
+    st.markdown("### 🙏 Pray together in the Lord (중보기도 요청)")
+
+    dfp_all = cached_all_prayers_df()
+    if dfp_all.empty:
+        st.info("중보기도 요청이 아직 없습니다.")
+    else:
+        view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0)
+
+        dfp = dfp_all.copy()
+        dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
+
+        dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
+        dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
+        dfp["_use_date"] = dfp["_linked_dt"].dt.date
+        dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
+
+        # 월 필터(선택한 월 기준)
+        dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+
+        if view_mode.startswith("공동체"):
+            dfp = dfp[dfp["is_public_bool"]]
+
+        dfp = dfp.sort_values(by=["_created_dt"], ascending=False, na_position="last")
+
+        view = dfp.rename(
+            columns={
+                "saints_info": "성도 정보",
+                "prayer_title": "기도 제목",
+                "prayer_content": "기도 내용",
+                "is_public_bool": "공동체 중보",
+                "linked_day": "연결 QT 날짜",
+                "created_at": "작성 시각",
+            }
+        )
+
+        cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
+        st.dataframe(view[cols], use_container_width=True, hide_index=True)
+
+        # 다운로드(선택 월 기준)
+        csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "중보기도 CSV 다운로드(선택 월)",
+            data=csv_p,
+            file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        csv_all = dfp_all.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "중보기도 CSV 다운로드(전체 기간)",
+            data=csv_all,
+            file_name="intercessory_prayers_all.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 목회자/관리자 전용으로만 활용하세요.")
 
     st.markdown("### ⬇️ 데이터 다운로드")
     csv = dmonth.to_csv(index=False).encode("utf-8-sig")
@@ -988,6 +1175,43 @@ with st.container(border=True):
         st.success("저장되었습니다!")
         st.rerun()
 
+
+
+
+st.markdown("---")
+with st.container(border=True):
+    st.subheader("🙏 Pray together in the Lord (함께 기도해요)")
+    st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
+
+    role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+    name_to_save = clamp_20(st.session_state.get("member_name", ""))
+
+    pt = st.text_input("기도 제목(필수, 50자 이내)", max_chars=50, placeholder="예) 가족 구원을 위해", key="pray_title")
+    pc = st.text_area("기도 내용(선택, 300자 이내)", height=120, max_chars=300, placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.", key="pray_content")
+    pub = st.checkbox("공동체 중보 요청으로 표시(필요 시 교회 공지로 함께 기도 요청될 수 있어요)", value=True, key="pray_is_public")
+
+    if st.button("🙏 중보기도 요청 저장", use_container_width=True):
+        if not name_to_save:
+            st.warning("먼저 '성도 정보(이름)'를 저장해 주세요.")
+        elif not (pt or "").strip():
+            st.warning("기도 제목을 입력해 주세요.")
+        else:
+            # 오늘 선택된 날짜를 연결 정보로 함께 저장(선택)
+            linked = st.session_state.get("picked_day", today_kst()).isoformat()
+            storage.insert_prayer_request(
+                uid=str(uid),
+                member_role=role_to_save,
+                member_name=name_to_save,
+                prayer_title=pt,
+                prayer_content=pc,
+                is_public=bool(pub),
+                linked_day=linked,
+            )
+            st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
+            # 입력값 초기화
+            st.session_state["pray_title"] = ""
+            st.session_state["pray_content"] = ""
+            st.rerun()
 
 
 # 기록 확인(기본: 주간, 전체 보기 토글)
