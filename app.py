@@ -1152,17 +1152,7 @@ with col_today:
             storage.upsert_one(uid, day_str, completed=not is_done, member_role=role_to_save, member_name=name_to_save)
             st.rerun()
 
-        # ✅ 클릭 후 바로 눈으로 확인(시작/종료/완료)
-        st.markdown("#### 👀 기록 확인")
-        s1, s2, s3 = st.columns([1, 1, 0.8], gap="small")
-        with s1:
-            st.markdown(f"**QT 시작**  \n{start_t or '-'}")
-        with s2:
-            st.markdown(f"**QT 종료**  \n{end_t or '-'}")
-        with s3:
-            st.markdown(f"**완료**  \n{'✅' if is_done else '—'}")
-
-        st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
+            st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
         memo = st.text_area(
             "경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
             height=85,
