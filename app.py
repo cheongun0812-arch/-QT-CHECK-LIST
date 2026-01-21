@@ -1267,6 +1267,7 @@ if "pray_public" not in st.session_state:
     st.session_state["pray_public"] = False
 
 with st.expander("🙏 함께 기도해요(Pray together in the Lord))", expanded=False):
+    st.subheader("🙏 Let's pray together in the Lord")
     st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
 
     # 저장 결과 메시지(한 번만 노출)
