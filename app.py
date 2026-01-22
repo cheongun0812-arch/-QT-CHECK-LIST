@@ -1468,8 +1468,8 @@ with st.container(border=True):
     with cR:
         btn_label = "열기" if not is_open else "닫기"
         if st.button(btn_label, key="toggle_pray_panel", use_container_width=True):
-    st.session_state["pray_panel_open"] = not is_open
-    st.rerun()  # ← 이 줄이 있으면 상태 반영이 더 확실합니다(권장)
+           st.session_state["pray_panel_open"] = not is_open
+           st.rerun()  # ← 이 줄이 있으면 상태 반영이 더 확실합니다(권장)
 
     # 내용(기본 숨김)
     if st.session_state["pray_panel_open"]:
