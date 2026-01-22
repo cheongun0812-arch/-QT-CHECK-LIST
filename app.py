@@ -1238,7 +1238,7 @@ with st.container(border=True):
     with v2:
         st.metric("QT 종료", cur_end or "—")
     with v3:
-        st.metric("꼭", "✅" if cur_done else "—")
+        st.metric("완료", "✅" if cur_done else "—")
 
     st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
     if st.session_state.get("_note_day") != day_str:
