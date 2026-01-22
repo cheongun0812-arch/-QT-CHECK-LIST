@@ -309,20 +309,44 @@ def apply_css():
             display:inline-flex;
             align-items:center;
           }
-          .prayer-beacon{
-            position:absolute;
-            top:-6px;
-            right:-6px;
-            width:10px;
-            height:10px;
-            border-radius:999px;
-            background: rgba(176,124,255,0.95); /* 기존 보라 톤과 조화 */
-            box-shadow: 0 0 0 0 rgba(176,124,255,0.55);
-            animation: beaconPulse 1.1s infinite;
+          
+/* Pray together panel slide animation */
+          .prayer-panel{
+            max-height: 0px;
+            overflow: hidden;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: max-height 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+                        opacity 0.22s ease,
+                        transform 0.22s ease;
+            will-change: max-height, opacity, transform;
           }
+          .prayer-panel.open{
+            max-height: 900px;
+            opacity: 1;
+            transform: translateY(0px);
+            margin-top: 6px;
+          }
+
+.prayer-beacon{
+            position:absolute;
+            top:-7px;
+            right:-7px;
+            width:12px;
+            height:12px;
+            border-radius:999px;
+            background: rgba(240,171,252,0.98); /* 밝은 보라/핑크 */
+            box-shadow: 0 0 10px 4px rgba(240,171,252,0.95), 0 0 18px 8px rgba(168,85,247,0.55);
+            animation: beaconPulse 0.95s infinite ease-in-out;
+          }
+
           @keyframes beaconPulse{
-            0%   { transform: scale(0.75); opacity: .65; box-shadow: 0 0 0 0 rgba(176,124,255,.55); }
-            55%  { transform: scale(1.0);  opacity: 1.0; box-shadow: 0 0 0 10px rgba(176,124,255,0); }
+            0%   { transform: scale(0.75); opacity: .85; box-shadow: 0 0 8px 3px rgba(240,171,252,0.95), 0 0 0 0 rgba(168,85,247,0.55); }
+            55%  { transform: scale(1.12); opacity: 1.0; box-shadow: 0 0 14px 6px rgba(240,171,252,1.00), 0 0 0 24px rgba(168,85,247,0.00); }
+            100% { transform: scale(0.75); opacity: .85; box-shadow: 0 0 8px 3px rgba(240,171,252,0.95), 0 0 0 0 rgba(168,85,247,0.00); }
+          }
+
+55%  { transform: scale(1.0);  opacity: 1.0; box-shadow: 0 0 0 10px rgba(176,124,255,0); }
             100% { transform: scale(0.75); opacity: .65; box-shadow: 0 0 0 0 rgba(176,124,255,0); }
           }
 
@@ -399,6 +423,12 @@ class GoogleSheetsStorage:
 
         self._row_index: dict[tuple[str, str], int] = {}  # (uid, day) -> row_idx
         self._index_built_at: float = 0.0
+
+        # Small in-memory DataFrame cache (keeps UI interactions snappy)
+        self._records_df_cache = None
+        self._records_df_cache_ts = 0.0
+        self._prayers_df_cache = None
+        self._prayers_df_cache_ts = 0.0
 
         # Verify schema once at creation (with retry/backoff)
         self._ensure_schema()
@@ -539,14 +569,25 @@ class GoogleSheetsStorage:
     def fetch_all_records_df(self) -> pd.DataFrame:
         """(관리/분석용) 전체 로드. 호출 횟수는 최소화해서 사용하세요."""
         self._ensure_schema()
+        import time
+        if self._records_df_cache is not None and (time.time() - self._records_df_cache_ts) < 8:
+            return self._records_df_cache.copy()
         rows = self._call_with_retries(self.ws.get_all_records)
         df_all = pd.DataFrame(rows)
         if df_all.empty:
-            return pd.DataFrame(columns=self.RECORDS_REQUIRED)
+            df_out = pd.DataFrame(columns=self.RECORDS_REQUIRED)
+            self._records_df_cache = df_out
+            import time
+            self._records_df_cache_ts = time.time()
+            return df_out.copy()
         for c in self.RECORDS_REQUIRED:
             if c not in df_all.columns:
                 df_all[c] = ""
-        return df_all[self.RECORDS_REQUIRED]
+        df_out = df_all[self.RECORDS_REQUIRED].copy()
+        self._records_df_cache = df_out
+        import time
+        self._records_df_cache_ts = time.time()
+        return df_out.copy()
 
     # -------------------------
     # Prayers (intercessory)
@@ -554,14 +595,25 @@ class GoogleSheetsStorage:
     def fetch_all_prayers_df(self) -> pd.DataFrame:
         """(관리/목회자용) 중보기도 요청 전체 로드."""
         self._ensure_schema()
+        import time
+        if self._prayers_df_cache is not None and (time.time() - self._prayers_df_cache_ts) < 8:
+            return self._prayers_df_cache.copy()
         rows = self._call_with_retries(self.ws_prayers.get_all_records)
         dfp = pd.DataFrame(rows)
         if dfp.empty:
-            return pd.DataFrame(columns=self.PRAYERS_REQUIRED)
+            df_out = pd.DataFrame(columns=self.PRAYERS_REQUIRED)
+            self._prayers_df_cache = df_out
+            import time
+            self._prayers_df_cache_ts = time.time()
+            return df_out.copy()
         for c in self.PRAYERS_REQUIRED:
             if c not in dfp.columns:
                 dfp[c] = ""
-        return dfp[self.PRAYERS_REQUIRED]
+        df_out = dfp[self.PRAYERS_REQUIRED].copy()
+        self._prayers_df_cache = df_out
+        import time
+        self._prayers_df_cache_ts = time.time()
+        return df_out.copy()
 
     def insert_prayer_request(
         self,
@@ -611,6 +663,9 @@ class GoogleSheetsStorage:
                 row.append("")
 
         self._call_with_retries(self.ws_prayers.append_row, row, value_input_option="USER_ENTERED")
+        # Invalidate cached full prayers df
+        self._prayers_df_cache = None
+        self._prayers_df_cache_ts = 0.0
 
 
     # -------------------------
@@ -790,6 +845,9 @@ class GoogleSheetsStorage:
             # index is now stale; rebuild later
             self._row_index = {}
             self._index_built_at = 0.0
+            # Invalidate cached full records df
+            self._records_df_cache = None
+            self._records_df_cache_ts = 0.0
             return
 
         # update_cells 1회 호출
@@ -810,6 +868,9 @@ class GoogleSheetsStorage:
 
         if cells:
             self._call_with_retries(self.ws.update_cells, cells, value_input_option="USER_ENTERED")
+            # Invalidate cached full records df
+            self._records_df_cache = None
+            self._records_df_cache_ts = 0.0
 
 # local helper (kept near class; no other code touched)
 def _col_to_letter(n: int) -> str:
@@ -1338,6 +1399,10 @@ with st.container(border=True):
 if "show_prayer_panel" not in st.session_state:
     st.session_state["show_prayer_panel"] = False
 
+def _toggle_prayer_panel():
+    st.session_state["show_prayer_panel"] = not st.session_state.get("show_prayer_panel", False)
+
+
 with st.container(border=True):
     # 제목(항상 노출) + 비콘(항상 점멸)
     tcol, bcol = st.columns([6, 1])
@@ -1354,76 +1419,76 @@ with st.container(border=True):
             unsafe_allow_html=True,
         )
     with bcol:
-        btn_label = "열기" if not st.session_state["show_prayer_panel"] else "닫기"
-        if st.button(btn_label, key="toggle_prayer_panel", use_container_width=True):
-            st.session_state["show_prayer_panel"] = not st.session_state["show_prayer_panel"]
-            st.rerun()
+        btn_label = "열기" if not st.session_state.get("show_prayer_panel", False) else "닫기"
+        st.button(btn_label, key="toggle_prayer_panel", use_container_width=True, on_click=_toggle_prayer_panel)
 
-    # 내용(기본 숨김)
-    if st.session_state["show_prayer_panel"]:
-        st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
+    # 내용(기본 숨김 + 슬라이드)
+    panel_class = "prayer-panel open" if st.session_state.get("show_prayer_panel", False) else "prayer-panel"
+    st.markdown(f'<div class="{panel_class}">', unsafe_allow_html=True)
+    st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
 
-        st.session_state.setdefault("pray_title", "")
-        st.session_state.setdefault("pray_content", "")
-        st.session_state.setdefault("pray_is_public", False)
-        st.session_state.setdefault("pray_err", "")
-        st.session_state.setdefault("pray_ok", False)
+    st.session_state.setdefault("pray_title", "")
+    st.session_state.setdefault("pray_content", "")
+    st.session_state.setdefault("pray_is_public", False)
+    st.session_state.setdefault("pray_err", "")
+    st.session_state.setdefault("pray_ok", False)
 
-        pt = st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
-        pc = st.text_area(
-            "기도 내용(선택, 300자 이내)",
-            height=120,
-            max_chars=300,
-            placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
-            key="pray_content",
+    pt = st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
+    pc = st.text_area(
+        "기도 내용(선택, 300자 이내)",
+        height=120,
+        max_chars=300,
+        placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
+        key="pray_content",
+    )
+
+    tcol2, ccol2 = st.columns([3, 1])
+    with tcol2:
+        st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
+    with ccol2:
+        st.checkbox("중보기도 요청", key="pray_is_public")  # 기본: 미체크(False)
+
+    def _submit_prayer():
+        role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+        name_to_save = clamp_20(st.session_state.get("member_name", ""))
+        ptv = (st.session_state.get("pray_title") or "").strip()
+        pcv = (st.session_state.get("pray_content") or "").strip()
+        pubv = bool(st.session_state.get("pray_is_public", False))
+
+        if not name_to_save:
+            st.session_state["pray_err"] = "먼저 '성도 정보(이름)'를 저장해 주세요."
+            st.session_state["pray_ok"] = False
+            return
+        if not ptv:
+            st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
+            st.session_state["pray_ok"] = False
+            return
+
+        linked = st.session_state.get("picked_day", today_kst()).isoformat()
+        storage.insert_prayer_request(
+            uid=str(uid),
+            member_role=role_to_save,
+            member_name=name_to_save,
+            prayer_title=ptv,
+            prayer_content=pcv,
+            is_public=pubv,
+            linked_day=linked,
         )
+        # 입력 초기화(콜백 안에서만)
+        st.session_state["pray_title"] = ""
+        st.session_state["pray_content"] = ""
+        st.session_state["pray_is_public"] = False
+        st.session_state["pray_err"] = ""
+        st.session_state["pray_ok"] = True
 
-        tcol2, ccol2 = st.columns([3, 1])
-        with tcol2:
-            st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
-        with ccol2:
-            st.checkbox("중보기도 요청", key="pray_is_public")  # 기본: 미체크(False)
+    st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
 
-        def _submit_prayer():
-            role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
-            name_to_save = clamp_20(st.session_state.get("member_name", ""))
-            ptv = (st.session_state.get("pray_title") or "").strip()
-            pcv = (st.session_state.get("pray_content") or "").strip()
-            pubv = bool(st.session_state.get("pray_is_public", False))
+    if st.session_state.get("pray_err"):
+        st.warning(st.session_state["pray_err"])
+    elif st.session_state.get("pray_ok"):
+        st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
 
-            if not name_to_save:
-                st.session_state["pray_err"] = "먼저 '성도 정보(이름)'를 저장해 주세요."
-                st.session_state["pray_ok"] = False
-                return
-            if not ptv:
-                st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
-                st.session_state["pray_ok"] = False
-                return
-
-            linked = st.session_state.get("picked_day", today_kst()).isoformat()
-            storage.insert_prayer_request(
-                uid=str(uid),
-                member_role=role_to_save,
-                member_name=name_to_save,
-                prayer_title=ptv,
-                prayer_content=pcv,
-                is_public=pubv,
-                linked_day=linked,
-            )
-            # 입력 초기화(콜백 안에서만)
-            st.session_state["pray_title"] = ""
-            st.session_state["pray_content"] = ""
-            st.session_state["pray_is_public"] = False
-            st.session_state["pray_err"] = ""
-            st.session_state["pray_ok"] = True
-
-        st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
-
-        if st.session_state.get("pray_err"):
-            st.warning(st.session_state["pray_err"])
-        elif st.session_state.get("pray_ok"):
-            st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
-
+    st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("---")
 # 내 QT 접속 주소(중요) - 화면 최하단
 share_url = build_share_url(uid)
@@ -1446,4 +1511,3 @@ if "<YOUR-APP>" in share_url:
     st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
 st.markdown("</div></div>", unsafe_allow_html=True)
 inject_share_panel_js()
-
