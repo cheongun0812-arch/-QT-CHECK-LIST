@@ -1466,7 +1466,7 @@ with st.container(border=True):
         )
 
     with cR:
-        btn = "닫기" if st.session_state["show_prayer_panel"] else "열기"
+        btn = "열기" if st.session_state["show_prayer_panel"] else "닫기"
         if st.button(btn, key="toggle_pray_panel", use_container_width=True):
             st.session_state["show_prayer_panel"] = not st.session_state["show_prayer_panel"]
             # st.rerun() 불필요 (button 클릭 자체가 rerun 유발)
