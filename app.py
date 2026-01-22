@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-22_final_v1"
+APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final"
 
 
 import pandas as pd
@@ -1062,6 +1062,7 @@ if mode == "관리자(대시보드)":
 # -------------------------
 # 성도님 모드
 # -------------------------
+
 # UID 관리
 if "uid" not in st.query_params:
     st.info("### 🙏 큐티 체크리스트 시작하기\n성도님 전용 기록지를 만들기 위해 아래 버튼을 눌러주세요.")
@@ -1073,6 +1074,74 @@ if "uid" not in st.query_params:
 
 uid = st.query_params["uid"]
 
+# 기본 상태 초기화
+if "picked_day" not in st.session_state:
+    st.session_state["picked_day"] = today_kst()
+
+if "month_label" not in st.session_state:
+    _cur = (today_kst().year, today_kst().month)
+    _labels = [m[2] for m in SUPPORTED_MONTHS]
+    _default_label = None
+    for y, m, lab in SUPPORTED_MONTHS:
+        if (y, m) == _cur:
+            _default_label = lab
+            break
+    st.session_state["month_label"] = _default_label or (_labels[0] if _labels else f"{_cur[0]}년 {_cur[1]}월")
+
+# 즉시 반영(리얼타임 보상감)용 로컬 오버라이드
+st.session_state.setdefault("local_qt_overrides", {})
+
+def _set_local(day_iso: str, **kwargs):
+    d = st.session_state["local_qt_overrides"].get(day_iso, {})
+    for k, v in kwargs.items():
+        if v is None:
+            continue
+        d[k] = v
+    st.session_state["local_qt_overrides"][day_iso] = d
+
+def _apply_overrides(df_in: pd.DataFrame) -> pd.DataFrame:
+    if df_in is None or df_in.empty:
+        return df_in
+    ov = st.session_state.get("local_qt_overrides", {})
+    if not ov:
+        return df_in
+    df2 = df_in.copy()
+    if "날짜" not in df2.columns:
+        return df2
+    for i, row in df2.iterrows():
+        ds = str(row.get("날짜", ""))
+        if ds in ov:
+            x = ov[ds]
+            if "start_time" in x and "QT 시작" in df2.columns:
+                df2.at[i, "QT 시작"] = (x.get("start_time") or df2.at[i, "QT 시작"])
+            if "end_time" in x and "QT 종료" in df2.columns:
+                df2.at[i, "QT 종료"] = (x.get("end_time") or df2.at[i, "QT 종료"])
+            if "completed" in x and "완료" in df2.columns:
+                df2.at[i, "완료"] = bool(x.get("completed"))
+            if "prayer_note" in x and "나의 묵상 기도" in df2.columns:
+                if (x.get("prayer_note") or "").strip():
+                    df2.at[i, "나의 묵상 기도"] = x.get("prayer_note")
+    return df2
+
+def _month_range_from_label(label: str) -> tuple[date, date]:
+    y, m = None, None
+    for yy, mm, lab in SUPPORTED_MONTHS:
+        if lab == label:
+            y, m = yy, mm
+            break
+    if y is None:
+        mm = re.findall(r"(\d{4})\D+(\d{1,2})", label or "")
+        if mm:
+            y, m = int(mm[0][0]), int(mm[0][1])
+        else:
+            y, m = today_kst().year, today_kst().month
+    start = date(y, m, 1)
+    if m == 12:
+        end = date(y + 1, 1, 1) - timedelta(days=1)
+    else:
+        end = date(y, m + 1, 1) - timedelta(days=1)
+    return start, end
+
 # 성도 프로필 자동 불러오기(최초 1회)
 if "profile_loaded" not in st.session_state:
     role0, name0 = storage.get_profile(uid)
@@ -1080,19 +1149,29 @@ if "profile_loaded" not in st.session_state:
     st.session_state["member_name"] = name0 or ""
     st.session_state["profile_loaded"] = True
 
-# 성도 정보 입력(상단)
-st.markdown("---")
+# ✅ 이 달 달성도(표시용) 계산 - 선택된 월 기준
+_m_label = st.session_state.get("month_label")
+_m_start, _m_end = _month_range_from_label(_m_label)
+df_month = _apply_overrides(storage.load_month(uid, _m_start, _m_end))
+done_cnt = int(df_month["완료"].sum()) if (df_month is not None and not df_month.empty and "완료" in df_month.columns) else 0
+total_cnt = int(len(df_month)) if df_month is not None else 0
+progress = (done_cnt / total_cnt) if total_cnt else 0.0
+
+# 1) 성도 정보(1회) + 이번 달 달성 (한 박스)
 with st.container(border=True):
     st.subheader("🙋 성도 정보(1회 입력)")
     st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/이름/직분이 함께 저장됩니다.")
 
-    col_r, col_n, col_s = st.columns([1.2, 1.8, 1.0])
+    col_r, col_n, col_s, col_a = st.columns([1, 1, 1, 1])
+
     with col_r:
         cur_role = st.session_state.get("member_role", MEMBER_ROLES[0])
         idx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
         st.selectbox("직분", MEMBER_ROLES, index=idx, key="member_role")
+
     with col_n:
         st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
+
     with col_s:
         st.write("")
         st.write("")
@@ -1106,145 +1185,176 @@ with st.container(border=True):
                 st.success("저장되었습니다! 다음 접속부터 자동으로 불러옵니다.")
                 st.rerun()
 
-    st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
+    with col_a:
+        st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.0%}")
+        st.progress(progress)
 
+    st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role',''))} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
 
-# 월 선택 + 이번 달 달성 (한 줄 2컬럼)
-col_month, col_ach = st.columns([1, 1])
-
-with col_month:
-    month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
-
-year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
-START, END = month_range(year, month)
-
-# 월 데이터(월 진행률/전체보기용)
-df = storage.load_month(uid, START, END)
-
-# 진행률
-done_cnt = int(df["완료"].sum()) if not df.empty else 0
-total_cnt = len(df) if len(df) > 0 else 1
-progress = done_cnt / total_cnt
-
-with col_ach:
-    st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
-    st.progress(progress)
-
-# 공유 링크 패널(자동 숨김 + 우측 아이콘 토글)
-
-# 오늘 기록
+# 2) 오늘의 큐티 기록 (월 선택/날짜 선택 좌·우)
 with st.container(border=True):
     st.subheader("✍️ 오늘의 큐티 기록")
 
-    if "picked_day" not in st.session_state:
-        st.session_state["picked_day"] = today_kst()
-    picked_day = st.date_input("날짜 선택", value=st.session_state["picked_day"], key="picked_day")
+    col_m, col_d = st.columns([1, 1])
+    with col_m:
+        st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS], key="month_label")
+    with col_d:
+        picked_day = st.date_input("날짜 선택", value=st.session_state["picked_day"], key="picked_day")
+
     day_str = picked_day.isoformat()
 
     role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
     name_to_save = clamp_20(st.session_state.get("member_name", ""))
 
+    df_day = _apply_overrides(storage.load_month(uid, picked_day, picked_day))
+    day_row = df_day.iloc[0].to_dict() if (df_day is not None and not df_day.empty) else {}
+    cur_start = day_row.get("QT 시작", "") or ""
+    cur_end = day_row.get("QT 종료", "") or ""
+    cur_done = bool(day_row.get("완료", False))
+    cur_note = str(day_row.get("나의 묵상 기도", "") or "")
+
     c1, c2, c3 = st.columns(3)
     if c1.button("▶ 시작(현재시간)", use_container_width=True):
-        storage.upsert_one(uid, day_str, start_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
-        st.rerun()
-    if c2.button("■ 종료(현재시간)", use_container_width=True):
-        storage.upsert_one(uid, day_str, end_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
+        t = now_hhmm_kst()
+        storage.upsert_one(uid, day_str, start_time=t, member_role=role_to_save, member_name=name_to_save)
+        _set_local(day_str, start_time=t)
         st.rerun()
 
-    is_done = df[df["날짜"] == day_str]["완료"].values[0] if not df[df["날짜"] == day_str].empty else False
-    if c3.button("✅ " + ("취소" if is_done else "완료"), use_container_width=True):
-        storage.upsert_one(uid, day_str, completed=not is_done, member_role=role_to_save, member_name=name_to_save)
+    if c2.button("■ 종료(현재시간)", use_container_width=True):
+        t = now_hhmm_kst()
+        storage.upsert_one(uid, day_str, end_time=t, member_role=role_to_save, member_name=name_to_save)
+        _set_local(day_str, end_time=t)
         st.rerun()
+
+    if c3.button("✅ " + ("취소" if cur_done else "완료"), use_container_width=True):
+        storage.upsert_one(uid, day_str, completed=not cur_done, member_role=role_to_save, member_name=name_to_save)
+        _set_local(day_str, completed=not cur_done)
+        st.rerun()
+
+    st.markdown("#### 🙌 기록 확인")
+    v1, v2, v3 = st.columns(3)
+    with v1:
+        st.metric("QT 시작", cur_start or "—")
+    with v2:
+        st.metric("QT 종료", cur_end or "—")
+    with v3:
+        st.metric("꼭", "✅" if cur_done else "—")
 
     st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
+    if st.session_state.get("_note_day") != day_str:
+        st.session_state["_note_day"] = day_str
+        st.session_state["prayer_note_input"] = cur_note[:50]
+
     memo = st.text_area(
-        "경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
+        "경건의 시간 하나님 앞에 서 있는 모습으로 한 줄 묵상 기도를 적어 보세요.",
         height=90,
         max_chars=50,
         placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
+        key="prayer_note_input",
     )
-    if st.button("기록 저장하기", use_container_width=True, type="primary"):
+
+    if st.button("묵상 기도 저장", use_container_width=True, type="primary"):
+        memo_clean = clamp_50(memo or "")
         storage.upsert_one(
             uid, day_str,
             signature="",
-            prayer_note=clamp_50(memo),
+            prayer_note=memo_clean,
             member_role=role_to_save,
-            member_name=name_to_save
+            member_name=name_to_save,
         )
-        st.success("저장되었습니다!")
+        _set_local(day_str, prayer_note=memo_clean)
+        st.success("저장되었습니다.")
         st.rerun()
 
-
-
-
-st.markdown("---")
+# 3) 기록 확인(주간) - '묵상 기도 저장' 바로 아래
 with st.container(border=True):
-    st.subheader("🙏 Pray together in the Lord (함께 기도해요)")
-    st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
+    st.subheader("📋 기록 확인 (주간)")
+    show_all = st.toggle("전체 보기 (한 달 전체)", value=False)
 
-    role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
-    name_to_save = clamp_20(st.session_state.get("member_name", ""))
+    if show_all:
+        df_all = _apply_overrides(storage.load_month(uid, _m_start, _m_end))
+        render_qt_table_html(df_all)
+    else:
+        anchor = st.session_state.get("picked_day", today_kst())
+        wk_start = week_start_monday(anchor)
+        wk_end = wk_start + timedelta(days=6)
 
-    pt = st.text_input("기도 제목(필수, 50자 이내)", max_chars=50, placeholder="예) 가족 구원을 위해", key="pray_title")
-    pc = st.text_area("기도 내용(선택, 300자 이내)", height=120, max_chars=300, placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.", key="pray_content")
-    st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
-    pub = st.checkbox("중보기도 요청", value=True, key="pray_is_public")
+        def _shift_week(delta_days: int):
+            a = st.session_state.get("picked_day", today_kst())
+            st.session_state["picked_day"] = a + timedelta(days=delta_days)
 
-    if st.button("🙏 중보기도 요청 저장", use_container_width=True):
+        nav1, nav2, _sp = st.columns([1, 1, 2])
+        with nav1:
+            st.button("⬅️ 이전 주", use_container_width=True, on_click=_shift_week, args=(-7,))
+        with nav2:
+            st.button("다음 주 ➡️", use_container_width=True, on_click=_shift_week, args=(+7,))
+
+        st.caption(f"표시 기간: {wk_start.isoformat()} ~ {wk_end.isoformat()} (월~일)")
+        df_week = _apply_overrides(storage.load_month(uid, wk_start, wk_end))
+        render_qt_table_html(df_week)
+
+# 4) Pray together (중보기도 요청)
+with st.container(border=True):
+    st.subheader("🙏 Pray together in the Lord (중보기도 요청)")
+    st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
+
+    st.session_state.setdefault("pray_title", "")
+    st.session_state.setdefault("pray_content", "")
+    st.session_state.setdefault("pray_is_public", False)
+
+    pt = st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
+    pc = st.text_area(
+        "기도 내용(선택, 300자 이내)",
+        height=120,
+        max_chars=300,
+        placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
+        key="pray_content",
+    )
+
+    tcol, ccol = st.columns([3, 1])
+    with tcol:
+        st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
+    with ccol:
+        st.checkbox("중보기도 요청", value=False, key="pray_is_public")
+
+    def _submit_prayer():
+        role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+        name_to_save = clamp_20(st.session_state.get("member_name", ""))
+        ptv = (st.session_state.get("pray_title") or "").strip()
+        pcv = (st.session_state.get("pray_content") or "").strip()
+        pubv = bool(st.session_state.get("pray_is_public", False))
+
         if not name_to_save:
-            st.warning("먼저 '성도 정보(이름)'를 저장해 주세요.")
-        elif not (pt or "").strip():
-            st.warning("기도 제목을 입력해 주세요.")
-        else:
-            # 오늘 선택된 날짜를 연결 정보로 함께 저장(선택)
-            linked = st.session_state.get("picked_day", today_kst()).isoformat()
-            storage.insert_prayer_request(
-                uid=str(uid),
-                member_role=role_to_save,
-                member_name=name_to_save,
-                prayer_title=pt,
-                prayer_content=pc,
-                is_public=bool(pub),
-                linked_day=linked,
-            )
-            st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
-            # 입력값 초기화
-            st.session_state["pray_title"] = ""
-            st.session_state["pray_content"] = ""
-            st.rerun()
+            st.session_state["pray_err"] = "먼저 '성도 정보(이름)'를 저장해 주세요."
+            st.session_state["pray_ok"] = False
+            return
+        if not ptv:
+            st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
+            st.session_state["pray_ok"] = False
+            return
 
+        linked = st.session_state.get("picked_day", today_kst()).isoformat()
+        storage.insert_prayer_request(
+            uid=str(uid),
+            member_role=role_to_save,
+            member_name=name_to_save,
+            prayer_title=ptv,
+            prayer_content=pcv,
+            is_public=pubv,
+            linked_day=linked,
+        )
+        st.session_state["pray_title"] = ""
+        st.session_state["pray_content"] = ""
+        st.session_state["pray_is_public"] = False
+        st.session_state["pray_err"] = ""
+        st.session_state["pray_ok"] = True
 
-# 기록 확인(기본: 주간, 전체 보기 토글)
-st.markdown("---")
-st.subheader("📋 기록 확인 (주간)")
-show_all = st.toggle("전체 보기 (한 달 전체)", value=False)
+    st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
 
-if show_all:
-    render_qt_table_html(df)
-else:
-    # ✅ 주간 표시: '월 선택 범위(START~END)'와 무관하게 항상 7일(월~일) 표를 보여줍니다.
-    # - 데이터가 없으면 빈 값으로 표시
-    # - 다른 달/미래 주도 이동 가능
-    anchor = st.session_state.get("picked_day", today_kst())
-    wk_start = week_start_monday(anchor)
-    wk_end = wk_start + timedelta(days=6)
-
-    def _shift_week(delta_days: int):
-        a = st.session_state.get("picked_day", today_kst())
-        # 월 범위로 clamp 하지 않음(주간 표는 항상 이동 가능)
-        st.session_state["picked_day"] = a + timedelta(days=delta_days)
-
-    nav1, nav2, _ = st.columns([1, 1, 2])
-    with nav1:
-        st.button("⬅️ 이전 주", use_container_width=True, on_click=_shift_week, args=(-7,))
-    with nav2:
-        st.button("다음 주 ➡️", use_container_width=True, on_click=_shift_week, args=(+7,))
-
-    st.caption(f"표시 기간: {wk_start.isoformat()} ~ {wk_end.isoformat()} (월~일)")
-    # 주간 표는 해당 7일만 로드(없는 날짜는 빈 행 생성)
-    df_week = storage.load_month(uid, wk_start, wk_end)
-    render_qt_table_html(df_week)
+    if st.session_state.get("pray_err"):
+        st.warning(st.session_state["pray_err"])
+    elif st.session_state.get("pray_ok"):
+        st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
 
 st.markdown("---")
 # 내 QT 접속 주소(중요) - 화면 최하단
