@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final_beacon_v1"
+APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final_beacon_v2"
 
 
 import pandas as pd
@@ -298,13 +298,13 @@ def apply_css():
           .prayer-title-row{
             display:flex;
             align-items:center;
-            justify-content:flex-start;
+            justify-content:space-between;
             gap: 10px;
             margin: 2px 0 2px 0;
           }
           .prayer-title{
             font-weight: 900;
-            font-size: 1.10rem;  /* h3와 동일(✍️ 오늘의 큐티 기록) */
+            font-size: 1.10rem;  /* ✍️ 오늘의 큐티 기록과 동일 크기 */
             line-height: 1.2;
             display:flex;
             align-items:center;
@@ -316,66 +316,44 @@ def apply_css():
             display:inline-flex;
             align-items:center;
           }
-          
-/* Pray together panel slide animation */
-          .prayer-panel{
-            max-height: 0px;
-            overflow: hidden;
-            opacity: 0;
-            transform: translateY(-8px);
-            transition: max-height 0.45s cubic-bezier(0.22, 1, 0.36, 1),
-                        opacity 0.22s ease,
-                        transform 0.22s ease;
-            will-change: max-height, opacity, transform;
-          }
-          .prayer-panel.open{
-            max-height: 900px;
-            opacity: 1;
-            transform: translateY(0px);
-            margin-top: 6px;
-          }
 
-.prayer-beacon{
+          /* --- Beacon (brighter + wider glow) --- */
+          .prayer-beacon{
             position:absolute;
-            top:-9px;
-            right:-9px;
-            width:14px;
-            height:14px;
+            top:-11px;
+            right:-11px;
+            width:16px;
+            height:16px;
             border-radius:999px;
-            background: rgba(251,191,36,0.98); /* 밝은 포인트(호박색) */
+            background: rgba(253,230,138,1.0);
             box-shadow:
-              0 0 14px 6px rgba(251,191,36,0.95),
-              0 0 26px 14px rgba(236,72,153,0.55),
-              0 0 36px 20px rgba(168,85,247,0.35);
-            animation: beaconPulse 1.05s infinite cubic-bezier(0.22, 1, 0.36, 1);
+              0 0 18px 8px rgba(253,230,138,0.98),
+              0 0 38px 20px rgba(236,72,153,0.62),
+              0 0 58px 34px rgba(168,85,247,0.40);
+            animation: beaconPulse 0.92s infinite cubic-bezier(0.22, 1, 0.36, 1);
           }
-
-@keyframes beaconPulse{
-            0%   { transform: scale(0.60); opacity: .80;
+          @keyframes beaconPulse{
+            0%   { transform: scale(0.62); opacity: .86;
                    box-shadow:
-                     0 0 12px 5px rgba(251,191,36,0.90),
-                     0 0 22px 12px rgba(236,72,153,0.45),
-                     0 0 32px 18px rgba(168,85,247,0.25); }
-            55%  { transform: scale(1.00); opacity: 1.00;
+                     0 0 16px 7px rgba(253,230,138,0.92),
+                     0 0 30px 16px rgba(236,72,153,0.55),
+                     0 0 46px 26px rgba(168,85,247,0.32); }
+            55%  { transform: scale(1.08); opacity: 1.00;
                    box-shadow:
-                     0 0 18px 8px rgba(251,191,36,0.98),
-                     0 0 34px 18px rgba(236,72,153,0.58),
-                     0 0 50px 28px rgba(168,85,247,0.35); }
-            100% { transform: scale(0.60); opacity: .80;
+                     0 0 22px 10px rgba(253,230,138,1.00),
+                     0 0 46px 24px rgba(236,72,153,0.70),
+                     0 0 70px 40px rgba(168,85,247,0.46); }
+            100% { transform: scale(0.62); opacity: .86;
                    box-shadow:
-                     0 0 12px 5px rgba(251,191,36,0.90),
-                     0 0 22px 12px rgba(236,72,153,0.45),
-                     0 0 32px 18px rgba(168,85,247,0.25); }
-          }
-            55%  { transform: scale(1.12); opacity: 1.0; box-shadow: 0 0 14px 6px rgba(240,171,252,1.00), 0 0 0 24px rgba(168,85,247,0.00); }
-            100% { transform: scale(0.75); opacity: .85; box-shadow: 0 0 8px 3px rgba(240,171,252,0.95), 0 0 0 0 rgba(168,85,247,0.00); }
+                     0 0 16px 7px rgba(253,230,138,0.92),
+                     0 0 30px 16px rgba(236,72,153,0.55),
+                     0 0 46px 26px rgba(168,85,247,0.32); }
           }
 
-55%  { transform: scale(1.0);  opacity: 1.0; box-shadow: 0 0 0 10px rgba(176,124,255,0); }
-            100% { transform: scale(0.75); opacity: .65; box-shadow: 0 0 0 0 rgba(176,124,255,0); }
-          }
-
-
+          /* expander 헤더 숨김: 우측 '열기/닫기' 버튼만 사용 */
+          div[data-testid="stExpander"] > details > summary { display: none; }
+          div[data-testid="stExpander"] > details { border: none; padding: 0 !important; }
+        
         </style>
         """,
         unsafe_allow_html=True,
@@ -595,7 +573,7 @@ class GoogleSheetsStorage:
         """(관리/분석용) 전체 로드. 호출 횟수는 최소화해서 사용하세요."""
         self._ensure_schema()
         import time
-        if self._records_df_cache is not None and (time.time() - self._records_df_cache_ts) < 8:
+        if self._records_df_cache is not None and (time.time() - self._records_df_cache_ts) < 20:
             return self._records_df_cache.copy()
         rows = self._call_with_retries(self.ws.get_all_records)
         df_all = pd.DataFrame(rows)
@@ -621,7 +599,7 @@ class GoogleSheetsStorage:
         """(관리/목회자용) 중보기도 요청 전체 로드."""
         self._ensure_schema()
         import time
-        if self._prayers_df_cache is not None and (time.time() - self._prayers_df_cache_ts) < 8:
+        if self._prayers_df_cache is not None and (time.time() - self._prayers_df_cache_ts) < 20:
             return self._prayers_df_cache.copy()
         rows = self._call_with_retries(self.ws_prayers.get_all_records)
         dfp = pd.DataFrame(rows)
@@ -1442,20 +1420,22 @@ with st.container(border=True):
         df_week = _apply_overrides(storage.load_month(uid, wk_start, wk_end))
         render_qt_table_html(df_week)
 
-# 4) Pray together (중보기도 요청) - 기본 숨김 + 비콘(등대) + 우측 열기/닫기 버튼
+# 4) Pray together (중보기도 요청) - 기본 숨김 + 비콘(등대) + 우측 '열기/닫기'
 with st.container(border=True):
+    # 패널 상태(기본 닫힘)
+    if "pray_panel_open" not in st.session_state or not isinstance(st.session_state.get("pray_panel_open"), bool):
+        st.session_state["pray_panel_open"] = False
 
-    # 토글 상태
-    if "show_prayer_panel" not in st.session_state:
-        st.session_state["show_prayer_panel"] = False
+    def _toggle_pray_panel():
+        st.session_state["pray_panel_open"] = not st.session_state.get("pray_panel_open", False)
+        st.session_state["pray_err"] = ""
 
-    # 제목(왼쪽) + 버튼(오른쪽)
-    cL, cR = st.columns([0.85, 0.15], vertical_alignment="center")
-
-    with cL:
+    # 제목(항상 노출) + 비콘(항상 점멸) + 우측 버튼
+    left, right = st.columns([6, 1])
+    with left:
         st.markdown(
             '''
-            <div class="prayer-title-row" style="margin:0;">
+            <div class="prayer-title-row">
               <div class="prayer-title">
                 <span class="prayer-icon-wrap">🙏<span class="prayer-beacon"></span></span>
                 <span>Pray together in the Lord (중보기도 요청)</span>
@@ -1465,14 +1445,12 @@ with st.container(border=True):
             unsafe_allow_html=True,
         )
 
-    with cR:
-        btn_label = "열기" if not is_open else "닫기"
-        if st.button(btn_label, key="toggle_pray_panel", use_container_width=True):
-           st.session_state["pray_panel_open"] = not is_open
-           st.rerun()  # ← 이 줄이 있으면 상태 반영이 더 확실합니다(권장)
+    with right:
+        btn_label = "열기" if not st.session_state.get("pray_panel_open", False) else "닫기"
+        st.button(btn_label, key="pray_toggle_btn", use_container_width=True, on_click=_toggle_pray_panel)
 
-    # 내용(기본 숨김)
-    if st.session_state["pray_panel_open"]:
+    # 내용은 기본 숨김. expander의 슬라이딩 애니메이션을 사용하고, 헤더는 CSS로 숨깁니다.
+    with st.expander(" ", expanded=st.session_state.get("pray_panel_open", False)):
         st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
 
         st.session_state.setdefault("pray_title", "")
@@ -1483,17 +1461,14 @@ with st.container(border=True):
         st.session_state.setdefault("pray_last_info", "")
         st.session_state.setdefault("pray_last_title", "")
 
-        pt = st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
-        pc = st.text_area(
+        st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
+        st.text_area(
             "기도 내용(선택, 300자 이내)",
             height=120,
             max_chars=300,
             placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
             key="pray_content",
         )
-
-        # ✅ 여기 아래로는 기존 저장 로직/체크박스/성공메시지 등을 그대로 이어 붙이시면 됩니다.
-        # 예) is_public 체크박스, 저장 버튼, storage.insert_prayer_request(...) 등
 
         tcol2, ccol2 = st.columns([3, 1])
         with tcol2:
@@ -1511,7 +1486,7 @@ with st.container(border=True):
             pubv = bool(st.session_state.get("pray_is_public", False))
 
             if not name_to_save:
-                st.session_state["pray_err"] = "먼저 '성도 정보(교구/이름)'를 저장해 주세요."
+                st.session_state["pray_err"] = "먼저 '성도 정보(교구/직분/이름)'를 저장해 주세요."
                 st.session_state["pray_ok"] = False
                 return
             if not ptv:
@@ -1531,7 +1506,8 @@ with st.container(border=True):
                 linked_day=linked,
             )
 
-            st.session_state["pray_last_info"] = f"{district_to_save}/" + (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
+            who = (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
+            st.session_state["pray_last_info"] = f"{district_to_save}/{who}".strip("/")
             st.session_state["pray_last_title"] = ptv
 
             # 입력 초기화(콜백 안에서만)
