@@ -1466,13 +1466,13 @@ with st.container(border=True):
         )
 
     with cR:
-        btn = "열기" if st.session_state["show_prayer_panel"] else "닫기"
-        if st.button(btn, key="toggle_pray_panel", use_container_width=True):
-            st.session_state["show_prayer_panel"] = not st.session_state["show_prayer_panel"]
-            # st.rerun() 불필요 (button 클릭 자체가 rerun 유발)
+        btn_label = "열기" if not is_open else "닫기"
+        if st.button(btn_label, key="toggle_pray_panel", use_container_width=True):
+    st.session_state["pray_panel_open"] = not is_open
+    st.rerun()  # ← 이 줄이 있으면 상태 반영이 더 확실합니다(권장)
 
     # 내용(기본 숨김)
-    if st.session_state["show_prayer_panel"]:
+    if st.session_state["pray_panel_open"]:
         st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
 
         st.session_state.setdefault("pray_title", "")
