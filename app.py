@@ -1442,22 +1442,37 @@ with st.container(border=True):
         df_week = _apply_overrides(storage.load_month(uid, wk_start, wk_end))
         render_qt_table_html(df_week)
 
-# 4) Pray together (중보기도 요청) - 기본 숨김(Expander) + 비콘(등대)
+# 4) Pray together (중보기도 요청) - 기본 숨김 + 비콘(등대) + 우측 열기/닫기 버튼
 with st.container(border=True):
-    # 제목(항상 노출) + 비콘(항상 점멸)
-    st.markdown(
-        '''
-        <div class="prayer-title-row">
-          <div class="prayer-title">
-            <span class="prayer-icon-wrap">🙏<span class="prayer-beacon"></span></span>
-            <span>Pray together in the Lord (중보기도 요청)</span>
-          </div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
 
-    with st.expander("열기 / 닫기", expanded=False):
+    # 토글 상태
+    if "show_prayer_panel" not in st.session_state:
+        st.session_state["show_prayer_panel"] = False
+
+    # 제목(왼쪽) + 버튼(오른쪽)
+    cL, cR = st.columns([0.85, 0.15], vertical_alignment="center")
+
+    with cL:
+        st.markdown(
+            '''
+            <div class="prayer-title-row" style="margin:0;">
+              <div class="prayer-title">
+                <span class="prayer-icon-wrap">🙏<span class="prayer-beacon"></span></span>
+                <span>Pray together in the Lord (중보기도 요청)</span>
+              </div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+
+    with cR:
+        btn = "닫기" if st.session_state["show_prayer_panel"] else "열기"
+        if st.button(btn, key="toggle_pray_panel", use_container_width=True):
+            st.session_state["show_prayer_panel"] = not st.session_state["show_prayer_panel"]
+            # st.rerun() 불필요 (button 클릭 자체가 rerun 유발)
+
+    # 내용(기본 숨김)
+    if st.session_state["show_prayer_panel"]:
         st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
 
         st.session_state.setdefault("pray_title", "")
@@ -1476,6 +1491,9 @@ with st.container(border=True):
             placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
             key="pray_content",
         )
+
+        # ✅ 여기 아래로는 기존 저장 로직/체크박스/성공메시지 등을 그대로 이어 붙이시면 됩니다.
+        # 예) is_public 체크박스, 저장 버튼, storage.insert_prayer_request(...) 등
 
         tcol2, ccol2 = st.columns([3, 1])
         with tcol2:
