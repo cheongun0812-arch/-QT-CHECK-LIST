@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final"
+APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final_beacon_v1"
 
 
 import pandas as pd
@@ -286,6 +286,47 @@ def apply_css():
           table.qti-table th:nth-child(4), table.qti-table td:nth-child(4) { width: 70px; }
           table.qti-table th:nth-child(5), table.qti-table td:nth-child(5) { width: auto; }
           table.qti-table tbody tr:last-child td { border-bottom: none; }
+
+          /* --- Pray together beacon (lighthouse) --- */
+          .prayer-title-row{
+            display:flex;
+            align-items:center;
+            justify-content:flex-start;
+            gap: 10px;
+            margin: 2px 0 2px 0;
+          }
+          .prayer-title{
+            font-weight: 900;
+            font-size: 1.10rem;  /* h3와 동일(✍️ 오늘의 큐티 기록) */
+            line-height: 1.2;
+            display:flex;
+            align-items:center;
+            gap: 8px;
+            user-select: none;
+          }
+          .prayer-icon-wrap{
+            position: relative;
+            display:inline-flex;
+            align-items:center;
+          }
+          .prayer-beacon{
+            position:absolute;
+            top:-6px;
+            right:-6px;
+            width:10px;
+            height:10px;
+            border-radius:999px;
+            background: rgba(176,124,255,0.95); /* 기존 보라 톤과 조화 */
+            box-shadow: 0 0 0 0 rgba(176,124,255,0.55);
+            animation: beaconPulse 1.1s infinite;
+          }
+          @keyframes beaconPulse{
+            0%   { transform: scale(0.75); opacity: .65; box-shadow: 0 0 0 0 rgba(176,124,255,.55); }
+            55%  { transform: scale(1.0);  opacity: 1.0; box-shadow: 0 0 0 10px rgba(176,124,255,0); }
+            100% { transform: scale(0.75); opacity: .65; box-shadow: 0 0 0 0 rgba(176,124,255,0); }
+          }
+
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -1293,68 +1334,95 @@ with st.container(border=True):
         df_week = _apply_overrides(storage.load_month(uid, wk_start, wk_end))
         render_qt_table_html(df_week)
 
-# 4) Pray together (중보기도 요청)
+# 4) Pray together (중보기도 요청) - 기본 숨김 + 비콘(등대)
+if "show_prayer_panel" not in st.session_state:
+    st.session_state["show_prayer_panel"] = False
+
 with st.container(border=True):
-    st.subheader("🙏 Pray together in the Lord (중보기도 요청)")
-    st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
-
-    st.session_state.setdefault("pray_title", "")
-    st.session_state.setdefault("pray_content", "")
-    st.session_state.setdefault("pray_is_public", False)
-
-    pt = st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
-    pc = st.text_area(
-        "기도 내용(선택, 300자 이내)",
-        height=120,
-        max_chars=300,
-        placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
-        key="pray_content",
-    )
-
-    tcol, ccol = st.columns([3, 1])
+    # 제목(항상 노출) + 비콘(항상 점멸)
+    tcol, bcol = st.columns([6, 1])
     with tcol:
-        st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
-    with ccol:
-        st.checkbox("중보기도 요청", value=False, key="pray_is_public")
-
-    def _submit_prayer():
-        role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
-        name_to_save = clamp_20(st.session_state.get("member_name", ""))
-        ptv = (st.session_state.get("pray_title") or "").strip()
-        pcv = (st.session_state.get("pray_content") or "").strip()
-        pubv = bool(st.session_state.get("pray_is_public", False))
-
-        if not name_to_save:
-            st.session_state["pray_err"] = "먼저 '성도 정보(이름)'를 저장해 주세요."
-            st.session_state["pray_ok"] = False
-            return
-        if not ptv:
-            st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
-            st.session_state["pray_ok"] = False
-            return
-
-        linked = st.session_state.get("picked_day", today_kst()).isoformat()
-        storage.insert_prayer_request(
-            uid=str(uid),
-            member_role=role_to_save,
-            member_name=name_to_save,
-            prayer_title=ptv,
-            prayer_content=pcv,
-            is_public=pubv,
-            linked_day=linked,
+        st.markdown(
+            '''
+            <div class="prayer-title-row">
+              <div class="prayer-title">
+                <span class="prayer-icon-wrap">🙏<span class="prayer-beacon"></span></span>
+                <span>Pray together in the Lord (중보기도 요청)</span>
+              </div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
         )
-        st.session_state["pray_title"] = ""
-        st.session_state["pray_content"] = ""
-        st.session_state["pray_is_public"] = False
-        st.session_state["pray_err"] = ""
-        st.session_state["pray_ok"] = True
+    with bcol:
+        btn_label = "열기" if not st.session_state["show_prayer_panel"] else "닫기"
+        if st.button(btn_label, key="toggle_prayer_panel", use_container_width=True):
+            st.session_state["show_prayer_panel"] = not st.session_state["show_prayer_panel"]
+            st.rerun()
 
-    st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
+    # 내용(기본 숨김)
+    if st.session_state["show_prayer_panel"]:
+        st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
 
-    if st.session_state.get("pray_err"):
-        st.warning(st.session_state["pray_err"])
-    elif st.session_state.get("pray_ok"):
-        st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
+        st.session_state.setdefault("pray_title", "")
+        st.session_state.setdefault("pray_content", "")
+        st.session_state.setdefault("pray_is_public", False)
+        st.session_state.setdefault("pray_err", "")
+        st.session_state.setdefault("pray_ok", False)
+
+        pt = st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
+        pc = st.text_area(
+            "기도 내용(선택, 300자 이내)",
+            height=120,
+            max_chars=300,
+            placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
+            key="pray_content",
+        )
+
+        tcol2, ccol2 = st.columns([3, 1])
+        with tcol2:
+            st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
+        with ccol2:
+            st.checkbox("중보기도 요청", key="pray_is_public")  # 기본: 미체크(False)
+
+        def _submit_prayer():
+            role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+            name_to_save = clamp_20(st.session_state.get("member_name", ""))
+            ptv = (st.session_state.get("pray_title") or "").strip()
+            pcv = (st.session_state.get("pray_content") or "").strip()
+            pubv = bool(st.session_state.get("pray_is_public", False))
+
+            if not name_to_save:
+                st.session_state["pray_err"] = "먼저 '성도 정보(이름)'를 저장해 주세요."
+                st.session_state["pray_ok"] = False
+                return
+            if not ptv:
+                st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
+                st.session_state["pray_ok"] = False
+                return
+
+            linked = st.session_state.get("picked_day", today_kst()).isoformat()
+            storage.insert_prayer_request(
+                uid=str(uid),
+                member_role=role_to_save,
+                member_name=name_to_save,
+                prayer_title=ptv,
+                prayer_content=pcv,
+                is_public=pubv,
+                linked_day=linked,
+            )
+            # 입력 초기화(콜백 안에서만)
+            st.session_state["pray_title"] = ""
+            st.session_state["pray_content"] = ""
+            st.session_state["pray_is_public"] = False
+            st.session_state["pray_err"] = ""
+            st.session_state["pray_ok"] = True
+
+        st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
+
+        if st.session_state.get("pray_err"):
+            st.warning(st.session_state["pray_err"])
+        elif st.session_state.get("pray_ok"):
+            st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
 
 st.markdown("---")
 # 내 QT 접속 주소(중요) - 화면 최하단
