@@ -1,5 +1,6 @@
 # coding: utf-8
 import os
+from pathlib import Path
 import secrets
 import json
 import re
@@ -922,6 +923,95 @@ def cached_all_prayers_df() -> pd.DataFrame:
     return s.fetch_all_prayers_df()
 
 
+# -------------------------
+# UID 디렉토리(성도별 UID/링크) 조회
+# - GitHub에서 app.py와 같은 폴더에 saints_uid_links.csv를 두면 자동으로 읽습니다.
+# - 형식: member_role, member_name, uid, link
+# -------------------------
+_UID_DIR_PATH = Path(__file__).with_name("saints_uid_links.csv")
+
+@st.cache_data(ttl=60)
+def load_uid_directory() -> pd.DataFrame:
+    if not _UID_DIR_PATH.exists():
+        return pd.DataFrame(columns=["member_role", "member_name", "uid", "link"])
+
+    try:
+        df = pd.read_csv(_UID_DIR_PATH, dtype=str).fillna("")
+    except Exception:
+        # 인코딩 이슈 대비
+        df = pd.read_csv(_UID_DIR_PATH, dtype=str, encoding="utf-8-sig").fillna("")
+
+    df.columns = [str(c).strip() for c in df.columns]
+    for c in ["member_role", "member_name", "uid", "link"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    df = df[["member_role", "member_name", "uid", "link"]].copy()
+    for c in df.columns:
+        df[c] = df[c].astype(str).str.strip()
+
+    df = df[df["member_name"] != ""].reset_index(drop=True)
+    return df
+
+
+def render_uid_lookup_page():
+    st.subheader("🔎 Find my UID access address (내 UID 접속 주소 찾기)")
+    st.caption("성도 이름으로 검색해서 본인 UID 접속 주소를 확인하고 복사해 사용하세요.")
+
+    df_dir = load_uid_directory()
+    if df_dir.empty:
+        st.warning("UID 명단 파일(saints_uid_links.csv)을 찾지 못했습니다. GitHub에서 app.py와 같은 폴더에 업로드/커밋했는지 확인해 주세요.")
+        return
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        q = st.text_input("성도 이름 검색", placeholder="예) 정청운").strip()
+    with c2:
+        roles = sorted([r for r in df_dir["member_role"].unique().tolist() if str(r).strip()])
+        role = st.selectbox("직분(선택)", ["전체"] + roles, index=0)
+
+    filtered = df_dir.copy()
+    if role != "전체":
+        filtered = filtered[filtered["member_role"] == role]
+    if q:
+        filtered = filtered[filtered["member_name"].str.contains(q, na=False)]
+
+    if filtered.empty:
+        st.info("검색 결과가 없습니다.")
+        return
+
+    options = filtered.to_dict("records")
+    picked = st.selectbox(
+        "본인을 선택하세요",
+        options=options,
+        format_func=lambda r: f"{(r.get('member_role','').strip() + ' ' if r.get('member_role','').strip() else '')}{r.get('member_name','')}",
+    )
+
+    member_role = (picked.get("member_role") or "").strip()
+    member_name = (picked.get("member_name") or "").strip()
+    uid = (picked.get("uid") or "").strip()
+    link = (picked.get("link") or "").strip()
+
+    if not link and uid:
+        link = build_share_url(uid)
+
+    who = f"{member_role} {member_name}".strip() if member_role else member_name
+
+    st.success(f'✅ The UID access address of Saint {who} is 아래와 같습니다.')
+    st.code(link, language="text")
+    st.caption("UID")
+    st.code(uid, language="text")
+
+    if st.button("이 링크로 기록하기로 이동", use_container_width=True, type="primary"):
+        try:
+            st.query_params["uid"] = uid
+        except Exception:
+            st.experimental_set_query_params(uid=uid)
+        # 라디오 선택을 기록하기로 돌려줌
+        st.session_state["mode_select"] = "성도님(기록하기)"
+        st.rerun()
+
+
 def require_admin_login() -> bool:
     admin_pw = st.secrets.get("ADMIN_KEY") or st.secrets.get("ADMIN_PASSWORD") or ADMIN_KEY_FALLBACK
 
@@ -1168,9 +1258,15 @@ if not storage:
 st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
 st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
 
-mode = st.radio("모드 선택", ["성도님(기록하기)", "관리자(대시보드)"], horizontal=True)
+mode = st.radio("모드 선택", ["성도님(기록하기)", "내 UID 접속 주소 찾기", "관리자(대시보드)"], horizontal=True, key="mode_select")
 
 # 관리자
+
+# 내 UID 접속 주소 찾기 (성도용)
+if mode == "내 UID 접속 주소 찾기":
+    render_uid_lookup_page()
+    st.stop()
+
 if mode == "관리자(대시보드)":
     if require_admin_login():
         admin_dashboard()
