@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final_beacon_v2"
+APP_BUILD = "weeklyfree_v2_2026-01-24_admin_fix_v2"
 
 
 import pandas as pd
@@ -930,7 +930,7 @@ def _col_to_letter(n: int) -> str:
         s = chr(65 + r) + s
     return s
 @st.cache_resource
-def get_storage() -> Optional[GoogleSheetsStorage]:
+def get_storage(_build: str = APP_BUILD) -> Optional[GoogleSheetsStorage]:
     if not GSHEETS_AVAILABLE:
         return None
     s_id = st.secrets.get("GSHEETS_SPREADSHEET_ID")
@@ -940,6 +940,49 @@ def get_storage() -> Optional[GoogleSheetsStorage]:
         return GoogleSheetsStorage(s_id, SHEET_RECORDS, sa_obj)
     return None
 
+
+
+
+def safe_get_profile(storage: object, uid: str) -> tuple[str, str, str]:
+    """storage가 캐시로 인해 구버전 인스턴스가 남아 get_profile이 없을 때도 안전하게 프로필을 읽는다."""
+    # 1) 정상 경로
+    if hasattr(storage, "get_profile"):
+        try:
+            return safe_get_profile(storage, uid)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    # 2) 구버전 storage라도 users 워크시트 핸들이 있으면 직접 읽기
+    if hasattr(storage, "ws_users") and hasattr(storage, "_call_with_retries"):
+        try:
+            rows = storage._call_with_retries(storage.ws_users.get_all_records)  # type: ignore[attr-defined]
+            dfu = pd.DataFrame(rows)
+            if not dfu.empty and "uid" in dfu.columns:
+                hit = dfu[dfu["uid"].astype(str) == str(uid)]
+                if not hit.empty:
+                    if "updated_at" in hit.columns:
+                        hit = hit.sort_values("updated_at")
+                    r = hit.iloc[-1]
+                    district = normalize_district(r.get("member_district", ""))
+                    role = normalize_role(r.get("member_role", ""))
+                    name = clamp_20(r.get("member_name", ""))
+                    return district, role, name
+        except Exception:
+            pass
+
+    # 3) 최후: 캐시 우회로 새 스토리지 인스턴스 생성 후 읽기
+    try:
+        if not GSHEETS_AVAILABLE:
+            return "", "", ""
+        s_id = st.secrets.get("GSHEETS_SPREADSHEET_ID")
+        sa_json = st.secrets.get("GSHEETS_SERVICE_ACCOUNT_JSON")
+        if not (s_id and sa_json):
+            return "", "", ""
+        sa_obj = json.loads(sa_json) if isinstance(sa_json, str) else sa_json
+        fresh = GoogleSheetsStorage(s_id, SHEET_RECORDS, sa_obj)
+        return fresh.get_profile(uid)
+    except Exception:
+        return "", "", ""
 
 @st.cache_data(ttl=60)
 def cached_all_records_df() -> pd.DataFrame:
@@ -1390,7 +1433,7 @@ def _month_range_from_label(label: str) -> tuple[date, date]:
 
 # 성도 프로필 자동 불러오기(최초 1회)
 if "profile_loaded" not in st.session_state:
-    dist0, role0, name0 = storage.get_profile(uid)
+    dist0, role0, name0 = safe_get_profile(storage, uid)
     st.session_state["member_district"] = dist0 or DISTRICTS[0]
     st.session_state["member_role"] = role0 or MEMBER_ROLES[0]
     st.session_state["member_name"] = name0 or ""
