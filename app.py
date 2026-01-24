@@ -1276,6 +1276,22 @@ if not storage:
 st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
 st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
 
+
+# -------------------------
+# UID 찾기 화면에서 '이 링크로 기록하기로 이동'을 눌렀을 때
+# (라디오 위젯이 생성되기 전에) uid 쿼리파라미터와 모드 값을 안전하게 적용
+# -------------------------
+goto_uid = st.session_state.pop("__goto_record_uid", None)
+if goto_uid:
+    try:
+        st.query_params["uid"] = goto_uid
+    except Exception:
+        st.experimental_set_query_params(uid=goto_uid)
+
+    # 라디오 위젯 생성 전에 값 세팅 (안전)
+    st.session_state["mode_select"] = "성도님(기록하기)"
+    st.rerun()
+
 mode = st.radio("모드 선택", ["성도님(기록하기)", "내 UID 접속 주소 찾기", "관리자(대시보드)"], horizontal=True, key="mode_select")
 
 # 관리자
