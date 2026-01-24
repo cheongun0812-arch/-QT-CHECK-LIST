@@ -31,14 +31,14 @@ except Exception:
 # 기본 설정
 # -------------------------
 APP_TITLE = "주만나와 함께 빚어가는, 예은의 향기"
-VERSE_TEXT = "하나님 보시기에 아름다운 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?"
+VERSE_TEXT = "주는 나의 은신처이오니 환난에서 나를 보호하시고 구원의 노래로 나를 두르시리이다.[시편32편7절], 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?"
 SUPPORTED_MONTHS = [(2026, 1, "2026년 1월"), (2026, 2, "2026년 2월"), (2026, 3, "2026년 3월"), (2026, 4, "2026년 4월"), (2026, 5, "2026년 5월"), (2026, 6, "2026년 6월"), (2026, 7, "2026년 7월"), (2026, 8, "2026년 8월"), (2026, 9, "2026년 9월"), (2026, 10, "2026년 10월"), (2026, 11, "2026년 11월"), (2026, 12, "2026년 12월"),]
 
 SHEET_RECORDS = "qti_records"  # 일별 기록
 SHEET_USERS = "qti_users"      # uid별 성도 정보(직분/이름)
 SHEET_PRAYERS = "intercessory_prayers"  # 중보기도 요청(Pray together in the Lord)
 
-MEMBER_ROLES = ["평신도", "서리집사", "안수집사", "권사", "장로", "전도사", "강도사", "목사", "기타"]
+MEMBER_ROLES = ["성도", "서리집사", "안수집사", "권사", "장로", "전도사", "강도사", "목사", "기타"]
 DISTRICTS = ["1교구", "2교구", "3교구", "4교구"]
 
 
@@ -955,8 +955,8 @@ def load_uid_directory() -> pd.DataFrame:
 
 
 def render_uid_lookup_page():
-    st.subheader("🔎 Find my UID access address (내 UID 접속 주소 찾기)")
-    st.caption("성도 이름으로 검색해서 본인 UID 접속 주소를 확인하고 복사해 사용하세요.")
+    st.subheader("🔎 내 UID 접속 주소 찾기")
+    st.caption("성도님 이름으로 검색해서 본인 UID 접속 주소를 확인하고 복사하여 사용하세요.")
 
     df_dir = load_uid_directory()
     if df_dir.empty:
@@ -1256,7 +1256,7 @@ if not storage:
     st.stop()
 
 st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
-st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
+st.caption("하나님 보시기에 참으로 아름다운 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
 
 mode = st.radio("모드 선택", ["성도님(기록하기)", "내 UID 접속 주소 찾기", "관리자(대시보드)"], horizontal=True, key="mode_select")
 
