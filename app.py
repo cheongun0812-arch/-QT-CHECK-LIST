@@ -377,6 +377,13 @@ def render_qt_table_html(df: pd.DataFrame):
 # 구글 시트 저장소
 # -------------------------
 class GoogleSheetsStorage:
+    """
+    Google Sheets 기반 저장소.
+
+    - records: QT 기록(일자별 start/end/completed/prayer_note 등)
+    - users: 성도 프로필(uid, 교구, 직분, 이름)
+    - prayers: 중보기도 요청(append-only)
+    """
     RECORDS_REQUIRED = [
         "uid", "member_role", "member_name", "day",
         "start_time", "end_time", "completed",
@@ -390,6 +397,9 @@ class GoogleSheetsStorage:
     ]
 
     def __init__(self, spreadsheet_id: str, worksheet_records: str, sa_json: dict):
+        import gspread
+        from google.oauth2.service_account import Credentials
+
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
@@ -409,308 +419,334 @@ class GoogleSheetsStorage:
         except Exception:
             self.ws_users = self.sh.add_worksheet(title="users", rows=2000, cols=10)
 
-        # prayers worksheet
         try:
-            self.ws_prayers = self.sh.worksheet(SHEET_PRAYERS)
+            self.ws_prayers = self.sh.worksheet("prayers")
         except Exception:
-            self.ws_prayers = self.sh.add_worksheet(title=SHEET_PRAYERS, rows=3000, cols=20)
+            self.ws_prayers = self.sh.add_worksheet(title="prayers", rows=2000, cols=15)
 
-        # schema/index cache (process-wide via st.cache_resource)
-        self._schema_verified = False
-        self._records_header: list[str] = []
-        self._users_header: list[str] = []
-        self._prayers_header: list[str] = []
-        self.col_idx: dict[str, int] = {}  # 1-indexed col index for records
-        self.users_col_idx: dict[str, int] = {}  # 1-indexed col index for users
-        self.prayers_col_idx: dict[str, int] = {}  # 1-indexed col index for prayers
+        # schema caches
+        self.headers = []
+        self.users_headers = []
+        self.prayers_headers = []
+        self.col_idx = {}
+        self.users_col_idx = {}
+        self.prayers_col_idx = {}
 
-        self._row_index: dict[tuple[str, str], int] = {}  # (uid, day) -> row_idx
-        self._index_built_at: float = 0.0
+        # row index cache (records)
+        self._row_index = {}
+        self._index_built_at = 0.0
 
-        # Small in-memory DataFrame cache (keeps UI interactions snappy)
+        # df caches
         self._records_df_cache = None
         self._records_df_cache_ts = 0.0
+        self._users_df_cache = None
+        self._users_df_cache_ts = 0.0
         self._prayers_df_cache = None
         self._prayers_df_cache_ts = 0.0
 
-        # Verify schema once at creation (with retry/backoff)
         self._ensure_schema()
 
     # -------------------------
-    # Low-level: retry wrapper
+    # Low-level call helper
     # -------------------------
     def _call_with_retries(self, fn, *args, **kwargs):
-        """Retry transient gspread API errors (429/5xx) with exponential backoff."""
         import time
-        last_err = None
-        for attempt in range(3):
+        last = None
+        for i in range(4):
             try:
                 return fn(*args, **kwargs)
-            except gspread.exceptions.APIError as e:
-                last_err = e
-                # Best-effort: retry on rate limit / transient backend issues
-                msg = str(e)
-                retryable = any(code in msg for code in ("429", "500", "502", "503", "504"))
-                if not retryable or attempt == 2:
-                    raise
-                time.sleep(1.0 * (2 ** attempt))
             except Exception as e:
-                # Non-API errors: don't spin unless clearly transient
-                last_err = e
-                raise
-        if last_err:
-            raise last_err
+                last = e
+                # 간단 백오프
+                time.sleep(0.4 * (i + 1))
+        raise last
 
     # -------------------------
-    # Schema: verify once
+    # Schema ensure
     # -------------------------
+    def _ensure_one_sheet(self, ws, required_cols):
+        # get header row (row 1)
+        try:
+            header = self._call_with_retries(ws.row_values, 1)
+        except Exception:
+            header = []
+
+        header = [h.strip() for h in header if str(h).strip() != ""]
+        changed = False
+
+        if not header:
+            header = list(required_cols)
+            changed = True
+        else:
+            for c in required_cols:
+                if c not in header:
+                    header.append(c)
+                    changed = True
+
+        if changed:
+            self._call_with_retries(ws.update, "A1", [header])
+
+        col_idx = {name: i + 1 for i, name in enumerate(header)}
+        return header, col_idx
+
     def _ensure_schema(self):
-        if self._schema_verified:
-            return
-
-        # records header
-        hdr = self._call_with_retries(self.ws.row_values, 1) or []
-        hdr = [str(x).strip() for x in hdr if str(x).strip()]
-
-        if not hdr:
-            hdr = list(self.RECORDS_REQUIRED)
-            # Ensure enough columns
-            try:
-                if self.ws.col_count < len(hdr):
-                    self._call_with_retries(self.ws.add_cols, len(hdr) - self.ws.col_count)
-            except Exception:
-                pass
-            self._call_with_retries(self.ws.update, "A1", [hdr])
-        else:
-            missing = [c for c in self.RECORDS_REQUIRED if c not in hdr]
-            if missing:
-                new_hdr = hdr + missing
-                try:
-                    if self.ws.col_count < len(new_hdr):
-                        self._call_with_retries(self.ws.add_cols, len(new_hdr) - self.ws.col_count)
-                except Exception:
-                    pass
-                self._call_with_retries(self.ws.update, "A1", [new_hdr])
-                hdr = new_hdr
-
-        self._records_header = hdr
-        self._refresh_col_index()
-
-        # users header
-        uhdr = self._call_with_retries(self.ws_users.row_values, 1) or []
-        uhdr = [str(x).strip() for x in uhdr if str(x).strip()]
-
-        if not uhdr:
-            uhdr = list(self.USERS_REQUIRED)
-            try:
-                if self.ws_users.col_count < len(uhdr):
-                    self._call_with_retries(self.ws_users.add_cols, len(uhdr) - self.ws_users.col_count)
-            except Exception:
-                pass
-            self._call_with_retries(self.ws_users.update, "A1", [uhdr])
-        else:
-            umissing = [c for c in self.USERS_REQUIRED if c not in uhdr]
-            if umissing:
-                new_uhdr = uhdr + umissing
-                try:
-                    if self.ws_users.col_count < len(new_uhdr):
-                        self._call_with_retries(self.ws_users.add_cols, len(new_uhdr) - self.ws_users.col_count)
-                except Exception:
-                    pass
-                self._call_with_retries(self.ws_users.update, "A1", [new_uhdr])
-                uhdr = new_uhdr
-
-        self._users_header = uhdr
-        self._refresh_users_col_index()
-
-        # prayers header
-        phdr = self._call_with_retries(self.ws_prayers.row_values, 1) or []
-        phdr = [str(x).strip() for x in phdr if str(x).strip()]
-
-        if not phdr:
-            phdr = list(self.PRAYERS_REQUIRED)
-            try:
-                if self.ws_prayers.col_count < len(phdr):
-                    self._call_with_retries(self.ws_prayers.add_cols, len(phdr) - self.ws_prayers.col_count)
-            except Exception:
-                pass
-            self._call_with_retries(self.ws_prayers.update, "A1", [phdr])
-        else:
-            pmissing = [c for c in self.PRAYERS_REQUIRED if c not in phdr]
-            if pmissing:
-                new_phdr = phdr + pmissing
-                try:
-                    if self.ws_prayers.col_count < len(new_phdr):
-                        self._call_with_retries(self.ws_prayers.add_cols, len(new_phdr) - self.ws_prayers.col_count)
-                except Exception:
-                    pass
-                self._call_with_retries(self.ws_prayers.update, "A1", [new_phdr])
-                phdr = new_phdr
-
-        self._prayers_header = phdr
-        self._refresh_prayers_col_index()
-
-        self._schema_verified = True
-
-    def _refresh_col_index(self):
-        self.col_idx = {name: i + 1 for i, name in enumerate(self._records_header)}
-
-    def _refresh_users_col_index(self):
-        self.users_col_idx = {name: i + 1 for i, name in enumerate(self._users_header)}
-
-    def _refresh_prayers_col_index(self):
-        self.prayers_col_idx = {name: i + 1 for i, name in enumerate(self._prayers_header)}
+        self.headers, self.col_idx = self._ensure_one_sheet(self.ws, self.RECORDS_REQUIRED)
+        self.users_headers, self.users_col_idx = self._ensure_one_sheet(self.ws_users, self.USERS_REQUIRED)
+        self.prayers_headers, self.prayers_col_idx = self._ensure_one_sheet(self.ws_prayers, self.PRAYERS_REQUIRED)
 
     # -------------------------
-    # Data helpers
+    # Fetch full sheets (cached)
     # -------------------------
-    def _empty_df(self, start: date, end: date) -> pd.DataFrame:
-        return pd.DataFrame(
-            [{"날짜": d.isoformat(), "QT 시작": "", "QT 종료": "", "완료": False, "나의 묵상 기도": ""} for d in daterange(start, end)]
-        )
-
     def fetch_all_records_df(self) -> pd.DataFrame:
-        """(관리/분석용) 전체 로드. 호출 횟수는 최소화해서 사용하세요."""
+        """records 시트 전체를 DataFrame으로 반환(짧은 캐시)."""
         self._ensure_schema()
-        import time
-        if self._records_df_cache is not None and (time.time() - self._records_df_cache_ts) < 20:
+        import time as _time
+        if self._records_df_cache is not None and (_time.time() - self._records_df_cache_ts) < 20:
             return self._records_df_cache.copy()
+
         rows = self._call_with_retries(self.ws.get_all_records)
-        df_all = pd.DataFrame(rows)
-        if df_all.empty:
-            df_out = pd.DataFrame(columns=self.RECORDS_REQUIRED)
-            self._records_df_cache = df_out
-            import time
-            self._records_df_cache_ts = time.time()
-            return df_out.copy()
+        df = pd.DataFrame(rows)
+        if df.empty:
+            self._records_df_cache = pd.DataFrame()
+            self._records_df_cache_ts = _time.time()
+            return pd.DataFrame()
+
         for c in self.RECORDS_REQUIRED:
-            if c not in df_all.columns:
-                df_all[c] = ""
-        df_out = df_all[self.RECORDS_REQUIRED].copy()
-        self._records_df_cache = df_out
-        import time
-        self._records_df_cache_ts = time.time()
-        return df_out.copy()
+            if c not in df.columns:
+                df[c] = ""
 
-    # -------------------------
-    # Prayers (intercessory)
-    # -------------------------
+        df["uid"] = df["uid"].astype(str)
+        df["day"] = df["day"].astype(str)
+        # normalize times
+        if "start_time" in df.columns:
+            df["start_time"] = df["start_time"].astype(str).map(normalize_hhmm)
+        if "end_time" in df.columns:
+            df["end_time"] = df["end_time"].astype(str).map(normalize_hhmm)
+        # completed string normalization (TRUE/FALSE, 1/0 등)
+        if "completed" in df.columns:
+            df["completed"] = df["completed"].astype(str)
+
+        self._records_df_cache = df[self.RECORDS_REQUIRED].copy()
+        self._records_df_cache_ts = _time.time()
+        return self._records_df_cache.copy()
+
     def fetch_all_prayers_df(self) -> pd.DataFrame:
-        """(관리/목회자용) 중보기도 요청 전체 로드."""
+        """prayers 시트 전체를 DataFrame으로 반환(짧은 캐시)."""
         self._ensure_schema()
-        import time
-        if self._prayers_df_cache is not None and (time.time() - self._prayers_df_cache_ts) < 20:
+        import time as _time
+        if self._prayers_df_cache is not None and (_time.time() - self._prayers_df_cache_ts) < 20:
             return self._prayers_df_cache.copy()
+
         rows = self._call_with_retries(self.ws_prayers.get_all_records)
-        dfp = pd.DataFrame(rows)
-        if dfp.empty:
-            df_out = pd.DataFrame(columns=self.PRAYERS_REQUIRED)
-            self._prayers_df_cache = df_out
-            import time
-            self._prayers_df_cache_ts = time.time()
-            return df_out.copy()
+        df = pd.DataFrame(rows)
+        if df.empty:
+            self._prayers_df_cache = pd.DataFrame()
+            self._prayers_df_cache_ts = _time.time()
+            return pd.DataFrame()
+
         for c in self.PRAYERS_REQUIRED:
-            if c not in dfp.columns:
-                dfp[c] = ""
-        df_out = dfp[self.PRAYERS_REQUIRED].copy()
-        self._prayers_df_cache = df_out
-        import time
-        self._prayers_df_cache_ts = time.time()
-        return df_out.copy()
+            if c not in df.columns:
+                df[c] = ""
 
+        df["uid"] = df["uid"].astype(str)
+        df["member_district"] = df["member_district"].astype(str).map(normalize_district)
+        df["member_role"] = df["member_role"].astype(str).map(normalize_role)
+        df["member_name"] = df["member_name"].astype(str).map(clamp_20)
+        df["saints_info"] = df["saints_info"].astype(str)
+        df["prayer_title"] = df["prayer_title"].astype(str)
+        df["prayer_content"] = df["prayer_content"].astype(str)
+        df["is_public"] = df["is_public"].astype(str)
 
-def fetch_all_users_df(self) -> pd.DataFrame:
-    """users 시트 전체를 DataFrame으로 반환(캐시)."""
-    self._ensure_schema()
-    import time as _time
-    try:
-        if getattr(self, "_users_df_cache", None) is not None and (_time.time() - getattr(self, "_users_df_cache_ts", 0)) < 20:
+        self._prayers_df_cache = df[self.PRAYERS_REQUIRED].copy()
+        self._prayers_df_cache_ts = _time.time()
+        return self._prayers_df_cache.copy()
+
+    def fetch_all_users_df(self) -> pd.DataFrame:
+        """users 시트 전체를 DataFrame으로 반환(짧은 캐시)."""
+        self._ensure_schema()
+        import time as _time
+        if self._users_df_cache is not None and (_time.time() - self._users_df_cache_ts) < 20:
             return self._users_df_cache.copy()
+
         rows = self._call_with_retries(self.ws_users.get_all_records)
-        dfu = pd.DataFrame(rows)
-        if dfu.empty:
+        df = pd.DataFrame(rows)
+        if df.empty:
             self._users_df_cache = pd.DataFrame()
             self._users_df_cache_ts = _time.time()
             return pd.DataFrame()
+
         for c in self.USERS_REQUIRED:
-            if c not in dfu.columns:
-                dfu[c] = ""
-        dfu["uid"] = dfu["uid"].astype(str)
-        dfu["member_district"] = dfu["member_district"].astype(str).map(normalize_district)
-        dfu["member_role"] = dfu["member_role"].astype(str).map(normalize_role)
-        dfu["member_name"] = dfu["member_name"].astype(str).map(clamp_20)
-        self._users_df_cache = dfu.copy()
+            if c not in df.columns:
+                df[c] = ""
+
+        df["uid"] = df["uid"].astype(str)
+        df["member_district"] = df["member_district"].astype(str).map(normalize_district)
+        df["member_role"] = df["member_role"].astype(str).map(normalize_role)
+        df["member_name"] = df["member_name"].astype(str).map(clamp_20)
+
+        self._users_df_cache = df[self.USERS_REQUIRED].copy()
         self._users_df_cache_ts = _time.time()
-        return dfu
-    except Exception:
-        return pd.DataFrame()
+        return self._users_df_cache.copy()
 
-def bulk_upsert_profiles(self, df_profiles: pd.DataFrame) -> Tuple[int, int]:
-    """UID 명단을 한 번에 users 시트에 반영(삽입/갱신)."""
-    self._ensure_schema()
-    if df_profiles is None or df_profiles.empty:
-        return (0, 0)
+    # -------------------------
+    # Profile (users sheet)
+    # -------------------------
+    def get_profile(self, uid: str) -> Tuple[str, str, str]:
+        """(교구, 직분, 이름)"""
+        try:
+            dfu = self.fetch_all_users_df()
+            if dfu.empty:
+                return "", "", ""
+            hit = dfu[dfu["uid"].astype(str) == str(uid)]
+            if hit.empty:
+                return "", "", ""
+            if "updated_at" in hit.columns:
+                hit = hit.sort_values("updated_at")
+            r = hit.iloc[-1]
+            return (
+                normalize_district(r.get("member_district", "")),
+                normalize_role(r.get("member_role", "")),
+                clamp_20(r.get("member_name", "")),
+            )
+        except Exception:
+            return "", "", ""
 
-    dfp = df_profiles.copy()
-    for c in ["uid", "member_district", "member_role", "member_name"]:
-        if c not in dfp.columns:
-            dfp[c] = ""
-    dfp["uid"] = dfp["uid"].astype(str).str.strip()
-    dfp["member_name"] = dfp["member_name"].astype(str).str.strip()
-    dfp = dfp[(dfp["uid"] != "") & (dfp["member_name"] != "")].copy()
-    if dfp.empty:
-        return (0, 0)
+    def upsert_profile(self, uid: str, member_district: str, member_role: str, member_name: str):
+        """프로필 저장(단건)."""
+        self._ensure_schema()
+        now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+        district = normalize_district(member_district)
+        role = normalize_role(member_role)
+        name = clamp_20(member_name)
 
-    now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
-    dfp["member_district"] = dfp["member_district"].astype(str).map(normalize_district)
-    dfp["member_role"] = dfp["member_role"].astype(str).map(normalize_role)
-    dfp["member_name"] = dfp["member_name"].astype(str).map(clamp_20)
-    dfp["updated_at"] = now_iso
-
-    # existing uid -> row index
-    try:
+        # uid 컬럼만 읽어서 기존 행 찾기 (1회)
         uid_col = self.users_col_idx.get("uid", 1)
         end_letter = _col_to_letter(uid_col)
         values = self._call_with_retries(self.ws_users.get, f"A2:{end_letter}")
-        uid_to_row = {}
+
+        row_idx = None
         for i, row in enumerate(values, start=2):
-            if row and len(row) >= uid_col:
-                v = str(row[uid_col - 1]).strip()
-                if v:
-                    uid_to_row[v] = i
-    except Exception:
-        uid_to_row = {}
+            v_uid = row[uid_col - 1] if len(row) >= uid_col else ""
+            if str(v_uid).strip() == str(uid).strip():
+                row_idx = i
+                break
 
-    updates = []
-    appends = []
-    updated = 0
-    inserted = 0
-
-    for _, r in dfp.iterrows():
-        uid = str(r["uid"]).strip()
-        row_values = [
-            uid,
-            r.get("member_district", ""),
-            r.get("member_role", ""),
-            r.get("member_name", ""),
-            r.get("updated_at", now_iso),
-        ]
-        if uid in uid_to_row:
-            row_idx = uid_to_row[uid]
-            updates.append({"range": f"A{row_idx}:E{row_idx}", "values": [row_values]})
-            updated += 1
+        if row_idx is None:
+            # append
+            new_row = []
+            for h in self.users_headers:
+                if h == "uid":
+                    new_row.append(str(uid))
+                elif h == "member_district":
+                    new_row.append(district)
+                elif h == "member_role":
+                    new_row.append(role)
+                elif h == "member_name":
+                    new_row.append(name)
+                elif h == "updated_at":
+                    new_row.append(now_iso)
+                else:
+                    new_row.append("")
+            self._call_with_retries(self.ws_users.append_row, new_row, value_input_option="USER_ENTERED")
         else:
-            appends.append(row_values)
-            inserted += 1
+            import gspread
+            cells = []
+            def q(colname, val):
+                c = self.users_col_idx.get(colname)
+                if c:
+                    cells.append(gspread.Cell(row_idx, c, str(val)))
+            q("member_district", district)
+            q("member_role", role)
+            q("member_name", name)
+            q("updated_at", now_iso)
+            if cells:
+                self._call_with_retries(self.ws_users.update_cells, cells, value_input_option="USER_ENTERED")
 
-    if updates:
-        self._call_with_retries(self.ws_users.batch_update, updates)
-    if appends:
-        self._call_with_retries(self.ws_users.append_rows, appends, value_input_option="USER_ENTERED")
+        # invalidate user cache
+        self._users_df_cache = None
+        self._users_df_cache_ts = 0.0
 
-    self._users_df_cache = None
-    self._users_df_cache_ts = 0.0
-    return (inserted, updated)
+    def bulk_upsert_profiles(self, df_profiles: pd.DataFrame) -> Tuple[int, int]:
+        """UID 명단을 한 번에 users 시트에 반영(삽입/갱신)."""
+        self._ensure_schema()
+        if df_profiles is None or df_profiles.empty:
+            return (0, 0)
+
+        dfp = df_profiles.copy()
+        for c in ["uid", "member_district", "member_role", "member_name"]:
+            if c not in dfp.columns:
+                dfp[c] = ""
+        dfp["uid"] = dfp["uid"].astype(str).str.strip()
+        dfp["member_name"] = dfp["member_name"].astype(str).str.strip()
+        dfp = dfp[(dfp["uid"] != "") & (dfp["member_name"] != "")].copy()
+        if dfp.empty:
+            return (0, 0)
+
+        now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+        dfp["member_district"] = dfp["member_district"].astype(str).map(normalize_district)
+        dfp["member_role"] = dfp["member_role"].astype(str).map(normalize_role)
+        dfp["member_name"] = dfp["member_name"].astype(str).map(clamp_20)
+        dfp["updated_at"] = now_iso
+
+        # existing uid -> row index
+        uid_col = self.users_col_idx.get("uid", 1)
+        end_letter = _col_to_letter(uid_col)
+        try:
+            values = self._call_with_retries(self.ws_users.get, f"A2:{end_letter}")
+            uid_to_row = {}
+            for i, row in enumerate(values, start=2):
+                if row and len(row) >= uid_col:
+                    v = str(row[uid_col - 1]).strip()
+                    if v:
+                        uid_to_row[v] = i
+        except Exception:
+            uid_to_row = {}
+
+        updates = []
+        appends = []
+        updated = 0
+        inserted = 0
+
+        last_col_letter = _col_to_letter(len(self.users_headers))
+
+        for _, r in dfp.iterrows():
+            uid = str(r["uid"]).strip()
+            row_values = []
+            for h in self.users_headers:
+                if h == "uid":
+                    row_values.append(uid)
+                elif h == "member_district":
+                    row_values.append(str(r.get("member_district", "")))
+                elif h == "member_role":
+                    row_values.append(str(r.get("member_role", "")))
+                elif h == "member_name":
+                    row_values.append(str(r.get("member_name", "")))
+                elif h == "updated_at":
+                    row_values.append(str(r.get("updated_at", "")))
+                else:
+                    row_values.append("")
+
+            if uid in uid_to_row:
+                row_idx = uid_to_row[uid]
+                updates.append({"range": f"A{row_idx}:{last_col_letter}{row_idx}", "values": [row_values]})
+                updated += 1
+            else:
+                appends.append(row_values)
+                inserted += 1
+
+        if updates:
+            self._call_with_retries(self.ws_users.batch_update, updates)
+        if appends:
+            self._call_with_retries(self.ws_users.append_rows, appends, value_input_option="USER_ENTERED")
+
+        # invalidate user cache
+        self._users_df_cache = None
+        self._users_df_cache_ts = 0.0
+        return (inserted, updated)
+
+    # -------------------------
+    # Prayers (append-only)
+    # -------------------------
     def insert_prayer_request(
         self,
         uid: str,
@@ -722,24 +758,19 @@ def bulk_upsert_profiles(self, df_profiles: pd.DataFrame) -> Tuple[int, int]:
         is_public: bool = True,
         linked_day: str = "",
     ):
-        """중보기도 요청은 "추가(append)"로만 저장합니다(기록 변경 이력 보존)."""
+        """중보기도 요청은 '추가(append)'로만 저장합니다(기록 변경 이력 보존)."""
         self._ensure_schema()
         now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
         district = normalize_district(member_district)
         role = normalize_role(member_role)
         name = clamp_20(member_name)
-        title = clamp_50(prayer_title)
-        content = clamp_300(prayer_content)
-        who = f"{role} {name}".strip() if role else name
-        saints_info = f"{district}/{who}".strip("/") if district else who
-        if linked_day:
-            try:
-                linked_day = str(date.fromisoformat(str(linked_day))).strip()
-            except Exception:
-                linked_day = str(linked_day).strip()
 
+        title = (prayer_title or "").strip()
+        content = (prayer_content or "").strip()
+
+        saints_info = f"{district}/{role} {name}".strip().strip("/")
         row = []
-        for h in self._prayers_header:
+        for h in self.prayers_headers:
             if h == "uid":
                 row.append(str(uid))
             elif h == "member_district":
@@ -764,82 +795,8 @@ def bulk_upsert_profiles(self, df_profiles: pd.DataFrame) -> Tuple[int, int]:
                 row.append("")
 
         self._call_with_retries(self.ws_prayers.append_row, row, value_input_option="USER_ENTERED")
-        # Invalidate cached full prayers df
         self._prayers_df_cache = None
         self._prayers_df_cache_ts = 0.0
-
-
-    # -------------------------
-    # Profile (users sheet)
-    # -------------------------
-    def get_profile(self, uid: str) -> Tuple[str, str, str]:
-        self._ensure_schema()
-        try:
-            rows = self._call_with_retries(self.ws_users.get_all_records)
-            dfu = pd.DataFrame(rows)
-            if dfu.empty:
-                return "", "", ""
-            hit = dfu[dfu["uid"].astype(str) == str(uid)]
-            if hit.empty:
-                return "", "", ""
-            if "updated_at" in hit.columns:
-                hit = hit.sort_values("updated_at")
-            r = hit.iloc[-1]
-            district = normalize_district(r.get("member_district", ""))
-            role = normalize_role(r.get("member_role", ""))
-            name = clamp_20(r.get("member_name", ""))
-            return district, role, name
-        except Exception:
-            return "", "", ""
-
-    def upsert_profile(self, uid: str, member_district: str, member_role: str, member_name: str):
-        """프로필 저장은 자주 호출되지 않으므로 단순/안전하게 처리."""
-        self._ensure_schema()
-        now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
-        district = normalize_district(member_district)
-        role = normalize_role(member_role)
-        name = clamp_20(member_name)
-
-        # 최소 호출: uid 컬럼만 읽어서 기존 행 찾기 (1회)
-        uid_col = self.users_col_idx.get("uid", 1)
-        max_col = uid_col
-        end_letter = _col_to_letter(max_col)
-        values = self._call_with_retries(self.ws_users.get, f"A2:{end_letter}")
-        row_idx = None
-        for i, row in enumerate(values, start=2):
-            v_uid = row[uid_col - 1] if len(row) >= uid_col else ""
-            if str(v_uid) == str(uid):
-                row_idx = i
-                break
-
-        if row_idx is None:
-            new_row = []
-            for h in self._users_header:
-                if h == "uid":
-                    new_row.append(str(uid))
-                elif h == "member_district":
-                    new_row.append(district)
-                elif h == "member_role":
-                    new_row.append(role)
-                elif h == "member_name":
-                    new_row.append(name)
-                elif h == "updated_at":
-                    new_row.append(now_iso)
-                else:
-                    new_row.append("")
-            self._call_with_retries(self.ws_users.append_row, new_row, value_input_option="USER_ENTERED")
-        else:
-            cells = []
-            def q(colname, val):
-                c = self.users_col_idx.get(colname)
-                if c:
-                    cells.append(gspread.Cell(row_idx, c, str(val)))
-            q("member_district", district)
-            q("member_role", role)
-            q("member_name", name)
-            q("updated_at", now_iso)
-            if cells:
-                self._call_with_retries(self.ws_users.update_cells, cells, value_input_option="USER_ENTERED")
 
     # -------------------------
     # Index build: (uid, day) -> row_idx
@@ -855,7 +812,6 @@ def bulk_upsert_profiles(self, df_profiles: pd.DataFrame) -> Tuple[int, int]:
         max_col = max(uid_col, day_col)
         end_letter = _col_to_letter(max_col)
 
-        # 1회 호출로 필요한 범위만 읽기
         values = self._call_with_retries(self.ws.get, f"A2:{end_letter}")
 
         idx = {}
@@ -863,122 +819,143 @@ def bulk_upsert_profiles(self, df_profiles: pd.DataFrame) -> Tuple[int, int]:
             v_uid = row[uid_col - 1] if len(row) >= uid_col else ""
             v_day = row[day_col - 1] if len(row) >= day_col else ""
             if v_uid and v_day:
-                idx[(str(v_uid), str(v_day))] = r_i
+                idx[(str(v_uid).strip(), str(v_day).strip())] = r_i
 
         self._row_index = idx
         self._index_built_at = time.time()
 
     # -------------------------
-    # Month load (UI)
+    # Load month: ensure all days exist
     # -------------------------
+    def _empty_df(self, start: date, end: date) -> pd.DataFrame:
+        days = []
+        cur = start
+        while cur <= end:
+            days.append(cur.isoformat())
+            cur += timedelta(days=1)
+        base = {c: "" for c in self.RECORDS_REQUIRED}
+        rows = []
+        for d in days:
+            r = base.copy()
+            r["day"] = d
+            rows.append(r)
+        return pd.DataFrame(rows)
+
     def load_month(self, uid: str, start: date, end: date) -> pd.DataFrame:
+        """uid의 start~end 범위 기록을 불러오고, 빠진 날짜는 빈 행으로 채움."""
         try:
             df_all = self.fetch_all_records_df()
-            if df_all.empty:
-                return self._empty_df(start, end)
-
-            user_data = df_all[
-                (df_all["uid"].astype(str) == str(uid))
-                & (df_all["day"] >= start.isoformat())
-                & (df_all["day"] <= end.isoformat())
-            ].copy()
-
-            if user_data.empty:
-                return self._empty_df(start, end)
-
-            # Normalize
-            user_data["day"] = user_data["day"].astype(str)
-
-            # Build view
-            out = []
-            mp = {row["day"]: row for _, row in user_data.iterrows()}
-            for d in daterange(start, end):
-                ds = d.isoformat()
-                r = mp.get(ds, {})
-                out.append(
-                    {
-                        "날짜": ds,
-                        "QT 시작": normalize_hhmm(r.get("start_time", "")),
-                        "QT 종료": normalize_hhmm(r.get("end_time", "")),
-                        "완료": str(r.get("completed", "")).lower() in ("true", "1", "yes", "y", "완료"),
-                        "나의 묵상 기도": (r.get("prayer_note", "") or ""),
-                    }
-                )
-            return pd.DataFrame(out)
         except Exception:
-            return self._empty_df(start, end)
+            df_all = pd.DataFrame()
+
+        df = df_all.copy() if not df_all.empty else pd.DataFrame(columns=self.RECORDS_REQUIRED)
+        df = df[df.get("uid", "").astype(str) == str(uid)].copy() if not df.empty else df
+
+        if not df.empty:
+            # date filter
+            df["day"] = df["day"].astype(str)
+            s = start.isoformat()
+            e = end.isoformat()
+            df = df[(df["day"] >= s) & (df["day"] <= e)].copy()
+
+            # 동일 day 중 최신만
+            if "updated_at" in df.columns:
+                df = df.sort_values("updated_at")
+            df = df.groupby("day", as_index=False).tail(1)
+
+        df_empty = self._empty_df(start, end)
+        df_empty["uid"] = str(uid)
+
+        if df.empty:
+            out = df_empty
+        else:
+            out = df_empty.merge(df, on="day", how="left", suffixes=("", "_y"))
+            # merge로 중복된 컬럼 정리
+            for c in self.RECORDS_REQUIRED:
+                if c == "day":
+                    continue
+                if f"{c}_y" in out.columns:
+                    out[c] = out[f"{c}_y"].where(out[f"{c}_y"].notna(), out.get(c, ""))
+                    out.drop(columns=[f"{c}_y"], inplace=True)
+            # ensure uid
+            out["uid"] = str(uid)
+
+        # normalize
+        if "start_time" in out.columns:
+            out["start_time"] = out["start_time"].astype(str).map(normalize_hhmm)
+        if "end_time" in out.columns:
+            out["end_time"] = out["end_time"].astype(str).map(normalize_hhmm)
+
+        # keep required order
+        for c in self.RECORDS_REQUIRED:
+            if c not in out.columns:
+                out[c] = ""
+        return out[self.RECORDS_REQUIRED].copy()
 
     # -------------------------
     # Upsert record: minimal calls
     # -------------------------
     def upsert_one(self, uid: str, day: str, **kwargs):
         self._ensure_schema()
+        self._build_row_index(force=False)
 
-        # Build (or reuse) index without reading entire sheet every time
-        self._build_row_index()
+        uid = str(uid).strip()
+        day = str(day).strip()
 
-        key = (str(uid), str(day))
-        row_idx = self._row_index.get(key)
+        row_idx = self._row_index.get((uid, day))
 
         now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
 
-        def norm_value(k, v):
-            if k in ("start_time", "end_time"):
-                return normalize_hhmm(str(v))
-            if k == "completed":
-                return "TRUE" if bool(v) else "FALSE"
-            if k == "member_role":
-                return normalize_role(str(v))
-            if k == "member_name":
-                return clamp_20(str(v))
-            if k == "prayer_note":
-                return str(v)[:5000]
-            return str(v)
-
+        # append new row if missing
         if row_idx is None:
-            # append 1회 호출
             row = []
-            for h in self._records_header:
+            for h in self.headers:
                 if h == "uid":
-                    row.append(str(uid))
+                    row.append(uid)
                 elif h == "day":
-                    row.append(str(day))
+                    row.append(day)
                 elif h == "updated_at":
                     row.append(now_iso)
-                elif h in kwargs:
-                    row.append(norm_value(h, kwargs[h]))
                 else:
                     row.append("")
+            # apply given values
+            def set_value(col, val):
+                if col in self.col_idx:
+                    i = self.col_idx[col] - 1
+                    if 0 <= i < len(row):
+                        row[i] = str(norm_value(col, val))
+            for k, v in kwargs.items():
+                if k in self.col_idx:
+                    set_value(k, v)
+
             self._call_with_retries(self.ws.append_row, row, value_input_option="USER_ENTERED")
-            # index is now stale; rebuild later
+
+            # index/cache invalidation
             self._row_index = {}
             self._index_built_at = 0.0
-            # Invalidate cached full records df
             self._records_df_cache = None
             self._records_df_cache_ts = 0.0
             return
 
-        # update_cells 1회 호출
+        # update existing row (update_cells 1회)
+        import gspread
         cells = []
+
         def queue_cell(col_name: str, val):
             c = self.col_idx.get(col_name)
             if c:
-                cells.append(gspread.Cell(row_idx, c, str(val)))
+                cells.append(gspread.Cell(row_idx, c, str(norm_value(col_name, val))))
 
-        # always keep these consistent
-        queue_cell("uid", str(uid))
-        queue_cell("day", str(day))
         queue_cell("updated_at", now_iso)
-
         for k, v in kwargs.items():
             if k in self.col_idx:
-                queue_cell(k, norm_value(k, v))
+                queue_cell(k, v)
 
         if cells:
             self._call_with_retries(self.ws.update_cells, cells, value_input_option="USER_ENTERED")
-            # Invalidate cached full records df
             self._records_df_cache = None
             self._records_df_cache_ts = 0.0
+            # index still valid (same row), keep
 
 # local helper (kept near class; no other code touched)
 def _col_to_letter(n: int) -> str:
@@ -1740,7 +1717,9 @@ with st.container(border=True):
         st.button(btn_label, key="pray_toggle_btn", use_container_width=True, on_click=_toggle_pray_panel)
 
     # 내용은 기본 숨김. expander의 슬라이딩 애니메이션을 사용하고, 헤더는 CSS로 숨깁니다.
-    with st.expander(" ", expanded=st.session_state.get("pray_panel_open", False)):
+    _panel_open = bool(st.session_state.get("pray_panel_open", False))
+    _exp_label = f"__PRAYER_PANEL__{1 if _panel_open else 0}"
+    with st.expander(_exp_label, expanded=_panel_open):
         st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
 
         st.session_state.setdefault("pray_title", "")
