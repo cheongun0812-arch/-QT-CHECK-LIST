@@ -875,19 +875,12 @@ def render_uid_lookup_page():
         return
 
     options = filtered.to_dict("records")
-
-    def _format_person(r: dict) -> str:
-        # 표시 형식: "직분 이름, 교구" (예: "안수집사 정청운, 2교구")
-        block = (r.get("block") or "").strip()
-        role = (r.get("member_role") or "").strip()
-        name = (r.get("member_name") or "").strip()
-        main = " ".join([x for x in [role, name] if x]).strip()
-        return f"{main}, {block}" if block else main
-
     picked = st.selectbox(
         "본인을 선택하세요",
         options=options,
-        format_func=_format_person,
+        format_func=lambda r: f"{(r.get('block') + ' ' if r.get('block') else '')}"
+                              f"{(r.get('member_role') + ' ' if r.get('member_role') else '')}"
+                              f"{r.get('member_name','')}"
     )
 
     block = picked.get("block", "")
@@ -896,12 +889,10 @@ def render_uid_lookup_page():
     uid = picked.get("uid", "")
     link = picked.get("link", "")
 
-    main = " ".join([x for x in [role_txt, name] if x]).strip()
+    who = f"{block} {role_txt} {name}".strip()
+    who = " ".join(who.split())
 
-    if block:
-        st.success(f"✅ {main}'s UID access address from {block} is as follows.")
-    else:
-        st.success(f"✅ {main}'s UID access address is as follows.")
+    st.success(f"✅ {who} 성도님의 UID 접속 주소는 아래와 같습니다.")
     st.code(link, language="text")
     st.write("UID")
     st.code(uid, language="text")
