@@ -1132,6 +1132,15 @@ def admin_dashboard():
 @media (max-width: 640px){
   .ps-value{font-size:1.75rem;}
 }
+
+/* 교구별 참여(컴팩트 테이블) - 동일 폭 카드 안에서 잘림 최소화 */
+.ps-parish-table table{width:100%;border-collapse:collapse;font-size:0.82rem;table-layout:fixed;}
+.ps-parish-table thead th{background:rgba(0,0,0,0.03);font-weight:600;opacity:0.9;}
+.ps-parish-table th,.ps-parish-table td{padding:0.28rem 0.38rem;border-bottom:1px solid rgba(0,0,0,0.06);vertical-align:top;}
+.ps-parish-table th,.ps-parish-table td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ps-parish-table th:first-child,.ps-parish-table td:first-child{white-space:normal;}
+.ps-parish-table td:nth-child(2),.ps-parish-table td:nth-child(3),.ps-parish-table td:nth-child(4){text-align:right;}
+
 </style>
         """,
         unsafe_allow_html=True,
@@ -1219,31 +1228,47 @@ def admin_dashboard():
             "이번 주 참여": len(uids & active_w_uids),
         })
     df_parish = pd.DataFrame(parish_rows)
+    # 4개 영역을 동일 폭으로 한 줄 정렬(초기 화면에서 모두 한눈에)
+    k_total, k_parish, k_month, k_week = st.columns(4)
 
-    # 4개 영역을 한 줄로 정렬하되, '교구별 참여' 표가 잘리지 않도록 가로 폭을 조금 더 배정
-    k_total, k_parish, k_month, k_week = st.columns([1.05, 2.2, 1.05, 1.05])
     with k_total:
         _stat_card("전체 UID 수", f"{t_all}명")
+
     with k_parish:
         st.markdown("<div class='ps-card'><div class='ps-title'>교구별 참여</div></div>", unsafe_allow_html=True)
         if df_parish.empty:
             st.caption("표시할 데이터가 없습니다.")
         else:
-            st.dataframe(
-                df_parish.sort_values(["이번 달 참여", "이번 주 참여", "Diocese"], ascending=[False, False, True]),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Diocese": st.column_config.TextColumn("Diocese", width="large"),
-                    "전체 UID": st.column_config.NumberColumn("전체 UID", width="small"),
-                    "이번 달 참여": st.column_config.NumberColumn("이번 달 참여", width="small"),
-                    "이번 주 참여": st.column_config.NumberColumn("이번 주 참여", width="small"),
-                },
+            _dft = df_parish.sort_values(["이번 달 참여", "이번 주 참여", "Diocese"], ascending=[False, False, True]).copy()
+
+            # 참여율(월/주) 표시: '명 (xx%)' 형식으로 컴팩트하게
+            def _fmt_cnt_rate(cnt, total):
+                try:
+                    total = int(total)
+                    cnt = int(cnt)
+                except Exception:
+                    return str(cnt)
+                rate = (cnt / total) if total else 0
+                return f"{cnt} ({rate:.0%})"
+
+            _show = pd.DataFrame({
+                "교구": _dft["Diocese"].astype(str),
+                "UID": _dft["전체 UID"].fillna(0).astype(int),
+                "월": [_fmt_cnt_rate(c, t) for c, t in zip(_dft["이번 달 참여"].fillna(0), _dft["전체 UID"].fillna(0))],
+                "주": [_fmt_cnt_rate(c, t) for c, t in zip(_dft["이번 주 참여"].fillna(0), _dft["전체 UID"].fillna(0))],
+            })
+
+            # HTML 테이블로 렌더링(동일 폭 컬럼에서도 잘림 최소화)
+            st.markdown(
+                "<div class='ps-parish-table'>" + _show.to_html(index=False, escape=True) + "</div>",
+                unsafe_allow_html=True,
             )
+
     with k_month:
-        _stat_card("이번 달 참여", f"{a_m}명", f"↑ {r_m:.0%}")
+
+        _stat_card("이번 달 참여", f"{a_m}명", f"참여율 {r_m:.0%}")
     with k_week:
-        _stat_card("이번 주 참여", f"{a_wk}명", f"↑ {r_wk:.0%}")
+        _stat_card("이번 주 참여", f"{a_wk}명", f"참여율 {r_wk:.0%}")
 
     st.markdown("### 👥 성도 참여(월 기준)")
     view_part = merged.rename(
