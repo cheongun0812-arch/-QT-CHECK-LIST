@@ -1007,7 +1007,7 @@ def render_uid_lookup_page():
             st.query_params["uid"] = uid
         except Exception:
             st.experimental_set_query_params(uid=uid)
-        # 라디오 선택을 기록하기로 돌려줌
+        # 모드도 성도 기록으로 전환
         st.session_state["mode_select"] = "성도님(기록하기)"
         st.rerun()
 
