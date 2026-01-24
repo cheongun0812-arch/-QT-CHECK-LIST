@@ -1118,6 +1118,38 @@ def admin_dashboard():
 
     st.markdown("### ✅ 참여 현황")
 
+    # 참여 현황(4개 카드) 타이틀 폰트/정렬 안정화 + 교구별 참여 표 가로 공간 확장
+    st.markdown(
+        """
+<style>
+/* Admin > 참여 현황 카드 스타일(섹션 전용) */
+.ps-card{padding:0.15rem 0.15rem 0.1rem 0.15rem;}
+.ps-title{font-size:0.95rem;font-weight:600;opacity:0.85;margin:0 0 0.15rem 0;}
+.ps-value{font-size:2.35rem;font-weight:700;line-height:1.05;margin:0;}
+.ps-delta{display:inline-block;margin-top:0.35rem;font-size:0.9rem;font-weight:600;
+          padding:0.12rem 0.5rem;border-radius:9999px;
+          background:rgba(0, 158, 96, 0.14);color:rgba(0, 120, 72, 0.95);}
+@media (max-width: 640px){
+  .ps-value{font-size:1.75rem;}
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    def _stat_card(title: str, value: str, delta: Optional[str] = None) -> None:
+        delta_html = f"<div class='ps-delta'>{delta}</div>" if delta else ""
+        st.markdown(
+            f"""
+<div class='ps-card'>
+  <div class='ps-title'>{title}</div>
+  <div class='ps-value'>{value}</div>
+  {delta_html}
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     # 프로필(사용자 시트 우선, 없으면 기록 시트 최신값) - 교구/직분/이름 매핑 정확도 보장
     df_users = cached_all_users_df()
     prof_users = pd.DataFrame(columns=["uid", "member_district", "member_role", "member_name"])
@@ -1188,10 +1220,12 @@ def admin_dashboard():
         })
     df_parish = pd.DataFrame(parish_rows)
 
-    k_total, k_parish, k_month, k_week = st.columns(4)
-    k_total.metric("전체 UID 수", f"{t_all}명")
+    # 4개 영역을 한 줄로 정렬하되, '교구별 참여' 표가 잘리지 않도록 가로 폭을 조금 더 배정
+    k_total, k_parish, k_month, k_week = st.columns([1.05, 2.2, 1.05, 1.05])
+    with k_total:
+        _stat_card("전체 UID 수", f"{t_all}명")
     with k_parish:
-        st.markdown("**교구별 참여**")
+        st.markdown("<div class='ps-card'><div class='ps-title'>교구별 참여</div></div>", unsafe_allow_html=True)
         if df_parish.empty:
             st.caption("표시할 데이터가 없습니다.")
         else:
@@ -1199,9 +1233,17 @@ def admin_dashboard():
                 df_parish.sort_values(["이번 달 참여", "이번 주 참여", "Diocese"], ascending=[False, False, True]),
                 use_container_width=True,
                 hide_index=True,
+                column_config={
+                    "Diocese": st.column_config.TextColumn("Diocese", width="large"),
+                    "전체 UID": st.column_config.NumberColumn("전체 UID", width="small"),
+                    "이번 달 참여": st.column_config.NumberColumn("이번 달 참여", width="small"),
+                    "이번 주 참여": st.column_config.NumberColumn("이번 주 참여", width="small"),
+                },
             )
-    k_month.metric("이번 달 참여", f"{a_m}명", f"{r_m:.0%}")
-    k_week.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
+    with k_month:
+        _stat_card("이번 달 참여", f"{a_m}명", f"↑ {r_m:.0%}")
+    with k_week:
+        _stat_card("이번 주 참여", f"{a_wk}명", f"↑ {r_wk:.0%}")
 
     st.markdown("### 👥 성도 참여(월 기준)")
     view_part = merged.rename(
