@@ -1498,7 +1498,7 @@ with st.container(border=True):
     with v3:
         st.metric("완료", "✅" if cur_done else "—")
 
-    st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
+    st.markdown("### 🕊️ 나의 묵상 기도 (150자 이내)")
     if st.session_state.get("_note_day") != day_str:
         st.session_state["_note_day"] = day_str
         st.session_state["prayer_note_input"] = cur_note[:50]
@@ -1506,7 +1506,7 @@ with st.container(border=True):
     memo = st.text_area(
         "경건의 시간 하나님 앞에 서 있는 내 모습을 생각하며 한 줄 묵상 기도를 적어 보세요.",
         height=90,
-        max_chars=300,
+        max_chars=150,
         placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
         key="prayer_note_input",
     )
@@ -1592,9 +1592,9 @@ with st.container(border=True):
         st.session_state.setdefault("pray_last_info", "")
         st.session_state.setdefault("pray_last_title", "")
 
-        st.text_input("기도 제목(필수, 40자 이내)", max_chars=40, placeholder="예) 가족 구원을 위해", key="pray_title")
+        st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 가족 구원을 위해", key="pray_title")
         st.text_area(
-            "기도 내용(선택, 300자 이내)",
+            "기도 내용(선택, 500자 이내)",
             height=120,
             max_chars=500,
             placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
