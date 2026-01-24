@@ -31,14 +31,14 @@ except Exception:
 # 기본 설정
 # -------------------------
 APP_TITLE = "주만나와 함께 빚어가는, 예은의 향기"
-VERSE_TEXT = "하나님 보시기에 아름다운 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?"
+VERSE_TEXT = "하나님 보시기에 아름다운 예은 성도님, 오늘도 주만나를 통해 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?"
 SUPPORTED_MONTHS = [(2026, 1, "2026년 1월"), (2026, 2, "2026년 2월"), (2026, 3, "2026년 3월"), (2026, 4, "2026년 4월"), (2026, 5, "2026년 5월"), (2026, 6, "2026년 6월"), (2026, 7, "2026년 7월"), (2026, 8, "2026년 8월"), (2026, 9, "2026년 9월"), (2026, 10, "2026년 10월"), (2026, 11, "2026년 11월"), (2026, 12, "2026년 12월"),]
 
 SHEET_RECORDS = "qti_records"  # 일별 기록
 SHEET_USERS = "qti_users"      # uid별 성도 정보(직분/이름)
 SHEET_PRAYERS = "intercessory_prayers"  # 중보기도 요청(Pray together in the Lord)
 
-MEMBER_ROLES = ["평신도", "서리집사", "안수집사", "권사", "장로", "전도사", "강도사", "목사", "기타"]
+MEMBER_ROLES = ["성도", "집사", "안수집사", "권사", "장로", "전도사", "강도사", "목사", "기타"]
 DISTRICTS = ["1교구", "2교구", "3교구", "4교구"]
 
 
@@ -597,7 +597,7 @@ class GoogleSheetsStorage:
     # Prayers (intercessory)
     # -------------------------
     def fetch_all_prayers_df(self) -> pd.DataFrame:
-        """(관리/목회자용) 중보기도 요청 전체 로드."""
+        """(관리/교구장/목회자용) 중보기도 요청 전체 로드."""
         self._ensure_schema()
         import time
         if self._prayers_df_cache is not None and (time.time() - self._prayers_df_cache_ts) < 20:
@@ -970,8 +970,8 @@ def load_uid_directory() -> pd.DataFrame:
     return df
 
 def render_uid_lookup_page():
-    st.subheader("🔎 내 UID 접속 주소 찾기")
-    st.caption("성도 이름으로 검색하여 본인 UID와 접속 링크를 확인/복사할 수 있습니다.")
+    st.subheader("🔎 내 UID 주소 찾기")
+    st.caption("성도 이름으로 검색하여 본인 UID와 접속 링크를 확인할 수 있습니다. 복사할 수 있습니다.")
 
     df_dir = load_uid_directory()
     if df_dir.empty:
@@ -1123,7 +1123,7 @@ def admin_dashboard():
 
 
     st.markdown("---")
-    st.markdown("### 🙏 Pray together in the Lord (중보기도 요청)")
+    st.markdown("### 🙏 중보기도 요청(Pray together in the Lord)")
 
     dfp_all = cached_all_prayers_df()
     if dfp_all.empty:
@@ -1180,7 +1180,7 @@ def admin_dashboard():
             use_container_width=True,
         )
 
-    st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 목회자/관리자 전용으로만 활용하세요.")
+    st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 교구장/목회자/관리자 전용으로만 활용하세요.")
 
     st.markdown("### ⬇️ 데이터 다운로드")
     csv = dmonth.to_csv(index=False).encode("utf-8-sig")
@@ -1191,7 +1191,7 @@ def admin_dashboard():
         mime="text/csv",
         use_container_width=True,
     )
-    st.caption("※ 이름이 비어있는 UID는 성도님이 성도 정보를 아직 저장하지 않은 경우입니다.")
+    st.caption("※ 이름이 비어있는 UID는 성도님이 정보를 아직 저장하지 않은 경우입니다.")
 
 
 # -------------------------
@@ -1274,7 +1274,7 @@ if not storage:
     st.stop()
 
 st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
-st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
+st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나를 통해 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
 
 
 # -------------------------
@@ -1592,7 +1592,7 @@ with st.container(border=True):
         st.session_state.setdefault("pray_last_info", "")
         st.session_state.setdefault("pray_last_title", "")
 
-        st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 가족 구원을 위해", key="pray_title")
+        st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 나의 건강 회복을 위해, 가족의 구원을 위해...등", key="pray_title")
         st.text_area(
             "기도 내용(선택, 500자 이내)",
             height=120,
@@ -1667,7 +1667,7 @@ st.markdown(
     """
     <div id="sharePanel">
       <div id="shareHeader">
-        <div id="shareTitle">📌 나의 QT 접속 주소 저장</div>
+        <div id="shareTitle">📌 나의 QT 주소(UID) 저장</div>
         <button id="shareToggleBtn" type="button">▴</button>
       </div>
       <div id="shareContent">
