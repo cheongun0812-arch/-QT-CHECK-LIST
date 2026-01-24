@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-24_admin_diocese_fix_v1"
+APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final_beacon_v2"
 
 
 import pandas as pd
@@ -354,18 +354,7 @@ def apply_css():
           div[data-testid="stExpander"] > details > summary { display: none; }
           div[data-testid="stExpander"] > details { border: none; padding: 0 !important; }
         
-        
-          /* --- Lock prayer expander header (toggle only via the button) --- */
-          div[data-testid="stExpander"] > details > summary {
-            pointer-events: none !important;
-            height: 0 !important;
-            padding: 0 !important;
-            margin: 0 !important;
-          }
-          div[data-testid="stExpander"] > details > summary::-webkit-details-marker { display:none; }
-          div[data-testid="stExpander"] > details { border: none !important; }
-
-</style>
+        </style>
         """,
         unsafe_allow_html=True,
     )
@@ -906,69 +895,51 @@ def _col_to_letter(n: int) -> str:
         s = chr(65 + r) + s
     return s
 @st.cache_resource
-@st.cache_resource(show_spinner=False)
-def get_storage(_build: str = APP_BUILD) -> Optional[GoogleSheetsStorage]:
-    """GoogleSheetsStorage 생성/캐시.
-    - _build 파라미터를 캐시 키로 사용하여 배포 버전이 바뀌면 자동으로 새로 초기화됩니다.
-    """
+def get_storage() -> Optional[GoogleSheetsStorage]:
     if not GSHEETS_AVAILABLE:
         return None
-    try:
-        s_id = st.secrets.get("GSHEETS_SPREADSHEET_ID")
-        sa_json = st.secrets.get("GSHEETS_SERVICE_ACCOUNT_JSON")
-    except Exception:
-        return None
-
+    s_id = st.secrets.get("GSHEETS_SPREADSHEET_ID")
+    sa_json = st.secrets.get("GSHEETS_SERVICE_ACCOUNT_JSON")
     if s_id and sa_json:
-        try:
-            sa_obj = json.loads(sa_json) if isinstance(sa_json, str) else sa_json
-            return GoogleSheetsStorage(s_id, SHEET_RECORDS, sa_obj)
-        except Exception:
-            return None
+        sa_obj = json.loads(sa_json) if isinstance(sa_json, str) else sa_json
+        return GoogleSheetsStorage(s_id, SHEET_RECORDS, sa_obj)
     return None
 
 
-
 @st.cache_data(ttl=60)
-def cached_all_records_df(_build: str = APP_BUILD) -> pd.DataFrame:
-    s = get_storage(_build)
+def cached_all_records_df() -> pd.DataFrame:
+    s = get_storage()
     if not s:
         return pd.DataFrame()
     return s.fetch_all_records_df()
 
 
 @st.cache_data(ttl=60)
-def cached_all_prayers_df(_build: str = APP_BUILD) -> pd.DataFrame:
-    s = get_storage(_build)
+def cached_all_prayers_df() -> pd.DataFrame:
+    s = get_storage()
     if not s:
         return pd.DataFrame()
     return s.fetch_all_prayers_df()
+
+
+
 @st.cache_data(ttl=60)
-def cached_all_users_df(_build: str = APP_BUILD) -> pd.DataFrame:
-    """users 시트 전체 로드(관리자용 집계/표시).
-    반환 컬럼: uid, member_district, member_role, member_name, updated_at
-    """
-    cols = ["uid", "member_district", "member_role", "member_name", "updated_at"]
-    s = get_storage(_build)
+def cached_all_users_df() -> pd.DataFrame:
+    """users 시트 전체 로드(관리자/UID조회용)."""
+    s = get_storage()
     if not s:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame()
     try:
-        s._ensure_schema()
-        rows = s._call_with_retries(s.ws_users.get_all_values) or []
-        if len(rows) <= 1:
-            return pd.DataFrame(columns=cols)
-        hdr = [str(x).strip() for x in rows[0]]
-        data = rows[1:]
-        df = pd.DataFrame(data, columns=hdr)
-        for c in cols:
-            if c not in df.columns:
-                df[c] = ""
-        df = df[cols].copy()
-        return df
+        rows = s.ws_users.get_all_records()
     except Exception:
-        return pd.DataFrame(columns=cols)
-
-
+        return pd.DataFrame()
+    dfu = pd.DataFrame(rows)
+    if dfu.empty:
+        return pd.DataFrame(columns=["uid", "member_district", "member_role", "member_name", "updated_at"])
+    for c in ["uid", "member_district", "member_role", "member_name", "updated_at"]:
+        if c not in dfu.columns:
+            dfu[c] = ""
+    return dfu[["uid", "member_district", "member_role", "member_name", "updated_at"]].copy()
 
 def require_admin_login() -> bool:
     admin_pw = st.secrets.get("ADMIN_KEY") or st.secrets.get("ADMIN_PASSWORD") or ADMIN_KEY_FALLBACK
@@ -1010,14 +981,164 @@ def compute_participation(df_all: pd.DataFrame, start: date, end: date) -> Tuple
     return active, total, rate
 
 
+
+def uid_lookup_page():
+    """대표 링크로 접속한 성도님이 이름으로 UID/개인 링크를 찾는 화면."""
+    st.header("🔎 내 UID 주소 확인")
+    st.caption("성도님 이름으로 UID와 개인 기록지 링크를 찾을 수 있습니다.")
+
+    # 안내(개인 링크 = 개인 기록지)
+    st.info(
+        "안내: 아래에서 찾은 링크(UID)는 **개인 기록지**입니다. "
+        "가능하면 본인만 보관해 주세요. (다른 분 UID로 접속하면 기록이 섞일 수 있습니다.)"
+    )
+
+    dfu = cached_all_users_df()
+    if dfu is None or dfu.empty:
+        st.warning("아직 UID 명단(users 시트)이 비어 있습니다. 관리자에게 UID 명단 업로드/등록을 요청해 주세요.")
+        return
+
+    # uid 기준 최신 1건만
+    try:
+        dfu["_t"] = pd.to_datetime(dfu.get("updated_at", ""), errors="coerce")
+    except Exception:
+        dfu["_t"] = pd.NaT
+    dfu = dfu.sort_values(["uid", "_t"])
+    dfu = dfu.groupby("uid", as_index=False).tail(1)
+
+    for c in ["member_district", "member_role", "member_name"]:
+        if c not in dfu.columns:
+            dfu[c] = ""
+        dfu[c] = dfu[c].fillna("").astype(str)
+
+    # 검색 UI
+    name_q = st.text_input("성도 이름", placeholder="예) 정청운")
+    c1, c2 = st.columns(2)
+    with c1:
+        district_opt = ["전체"] + DISTRICTS + ["미입력"]
+        district_q = st.selectbox("교구(선택)", district_opt, index=0)
+    with c2:
+        role_opt = ["전체"] + MEMBER_ROLES + ["미입력"]
+        role_q = st.selectbox("직분(선택)", role_opt, index=0)
+
+    if not name_q.strip():
+        st.caption("이름을 입력하면 해당하는 UID를 검색합니다.")
+        return
+
+    res = dfu.copy()
+    key = re.sub(r"\s+", "", name_q.strip())
+    res_name = res["member_name"].astype(str).str.replace(" ", "", regex=False)
+    res = res[res_name.str.contains(key, na=False)]
+
+    if district_q != "전체":
+        if district_q == "미입력":
+            res = res[res["member_district"].fillna("").eq("")]
+        else:
+            res = res[res["member_district"].eq(district_q)]
+
+    if role_q != "전체":
+        if role_q == "미입력":
+            res = res[res["member_role"].fillna("").eq("")]
+        else:
+            res = res[res["member_role"].eq(role_q)]
+
+    if res.empty:
+        st.warning("일치하는 성도 정보를 찾지 못했습니다. (교구/직분 필터를 '전체'로 바꿔 다시 검색해 보세요.)")
+        return
+
+    st.success(f"검색 결과: {len(res)}명")
+    for _, r in res.iterrows():
+        uid = str(r.get("uid", "")).strip()
+        if not uid:
+            continue
+
+        dist = (r.get("member_district", "") or "").strip()
+        role = (r.get("member_role", "") or "").strip()
+        name = (r.get("member_name", "") or "").strip()
+
+        label = ""
+        if dist:
+            label += f"{dist}/"
+        label += f"{role} {name}".strip() if role else f"{name}".strip()
+
+        link = build_share_url(uid)
+
+        with st.container(border=True):
+            st.write(f"**{label or name or uid}**")
+            st.code(link, language="text")
+            b1, b2 = st.columns([1, 1])
+            with b1:
+                if st.button("이 기록지로 이동", key=f"go_{uid}", use_container_width=True):
+                    st.query_params["uid"] = uid
+                    st.session_state["top_menu"] = "성도 정보 입력/기록"
+                    st.rerun()
+            with b2:
+                st.write(f"UID: `{uid}`")
+
+
 def admin_dashboard():
     st.header("📊 관리자 대시보드")
 
-    df_all = cached_all_records_df()
-    if df_all.empty:
-        st.info("기록이 아직 없습니다.")
+    s = get_storage()
+    if not s:
+        st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
         return
 
+    # (선택) UID 명단 업로드: 대표 링크 + '내 UID 주소 확인' 기능을 위한 users 시트 등록
+    with st.expander("🧾 UID 명단 업로드(선택)", expanded=False):
+        st.caption("CSV 컬럼 예시: member_role, member_name, uid (선택: member_district, link)")
+        up = st.file_uploader("UID 명단 CSV 업로드", type=["csv"], key="uid_list_uploader")
+        if up is not None:
+            try:
+                df_up = pd.read_csv(up, dtype=str).fillna("")
+                df_up.columns = [c.strip() for c in df_up.columns]
+            except Exception as e:
+                st.error(f"CSV를 읽을 수 없습니다: {e}")
+                df_up = pd.DataFrame()
+
+            if not df_up.empty:
+                # 허용 컬럼
+                need_uid = "uid" in df_up.columns
+                need_name = "member_name" in df_up.columns
+                if not (need_uid and need_name):
+                    st.error("CSV에는 최소한 uid, member_name 컬럼이 필요합니다.")
+                else:
+                    st.dataframe(df_up.head(20), use_container_width=True, hide_index=True)
+                    if st.button("✅ users 시트에 반영(업로드)", use_container_width=True):
+                        ok = 0
+                        for _, r in df_up.iterrows():
+                            uid = str(r.get("uid", "")).strip()
+                            name = str(r.get("member_name", "")).strip()
+                            if not uid or not name:
+                                continue
+                            dist = str(r.get("member_district", "")).strip()
+                            role = str(r.get("member_role", "")).strip()
+                            try:
+                                s.upsert_profile(uid, dist, role, name)
+                                ok += 1
+                            except Exception:
+                                continue
+                        try:
+                            cached_all_users_df.clear()
+                        except Exception:
+                            pass
+                        st.success(f"반영 완료: {ok}명")
+                        st.rerun()
+
+    df_all = cached_all_records_df()
+    users_all = cached_all_users_df()
+
+    # users 최신 1건(UID 단위)
+    if users_all is None or users_all.empty:
+        users_latest = pd.DataFrame(columns=["uid", "member_district", "member_role", "member_name", "updated_at"])
+    else:
+        tmp = users_all.copy()
+        tmp["uid"] = tmp["uid"].fillna("").astype(str)
+        tmp["_t"] = pd.to_datetime(tmp.get("updated_at", ""), errors="coerce")
+        tmp = tmp.sort_values(["uid", "_t"])
+        users_latest = tmp.groupby("uid", as_index=False).tail(1)[["uid", "member_district", "member_role", "member_name", "updated_at"]].copy()
+
+    # 통계 기준 선택
     c1, c2 = st.columns([1, 1])
     with c1:
         anchor = st.date_input("기준일(주간 통계)", value=today_kst())
@@ -1030,164 +1151,174 @@ def admin_dashboard():
     wk_start = week_start_monday(anchor)
     wk_end = wk_start + timedelta(days=6)
 
-    a_wk, t_all, r_wk = compute_participation(df_all, wk_start, wk_end)
-    a_m, _, r_m = compute_participation(df_all, m_start, m_end)
-
-    st.markdown("### ✅ 참여 현황")
-    k1, k2, k3 = st.columns(3)
-    k1.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
-    k2.metric("이번 달 참여", f"{a_m}명", f"{r_m:.0%}")
-    k3.metric("전체 UID 수", f"{t_all}명")
-
-    # --- 교구별 참여/등록 현황(관리자용) ---
-    df_users_all = cached_all_users_df()
-    # 최신 users 프로필(UID 기준 마지막 업데이트)
-    if not df_users_all.empty:
-        du = df_users_all.copy()
-        du["uid"] = du["uid"].astype(str).str.strip()
-        du = du[du["uid"] != ""]
-        du["_t"] = pd.to_datetime(du.get("updated_at", ""), errors="coerce")
-        du = du.sort_values(["uid", "_t"])
-        du = du.groupby("uid", as_index=False).tail(1)
-        du["member_district"] = du.get("member_district", "").fillna("").astype(str).str.strip()
-        du.loc[~du["member_district"].isin(DISTRICTS), "member_district"] = "미입력"
-    else:
-        du = pd.DataFrame(columns=["uid", "member_district", "member_role", "member_name", "updated_at"])
-
-    def _active_uids(df_src: pd.DataFrame, start_d: date, end_d: date) -> set[str]:
-        if df_src.empty:
+    def _active_uids(df: pd.DataFrame, start_d: date, end_d: date) -> set:
+        if df is None or df.empty:
             return set()
-        dx = df_src[(df_src["day"] >= start_d.isoformat()) & (df_src["day"] <= end_d.isoformat())].copy()
-        dx["completed_bool"] = dx["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
-        dx = dx[dx["completed_bool"]]
-        return set(dx["uid"].astype(str).str.strip().tolist())
+        dfx = df[(df["day"] >= start_d.isoformat()) & (df["day"] <= end_d.isoformat())].copy()
+        dfx["completed_bool"] = dfx["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+        dfx = dfx[dfx["completed_bool"]]
+        return set([u for u in dfx["uid"].astype(str).unique().tolist() if str(u).strip()])
 
-    active_wk_uids = _active_uids(df_all, wk_start, wk_end)
-    active_m_uids = _active_uids(df_all, m_start, m_end)
+    active_week = _active_uids(df_all, wk_start, wk_end)
+    active_month = _active_uids(df_all, m_start, m_end)
 
-    reg_uids = set(du["uid"].astype(str).str.strip().tolist()) if not du.empty else set()
-    # 교구별 등록 인원
-    reg_counts = du.groupby("member_district")["uid"].nunique().to_dict() if not du.empty else {}
+    # 전체 UID 수(가능하면 users 시트 기준)
+    total_uids_set = set([u for u in users_latest["uid"].astype(str).unique().tolist() if str(u).strip()]) if not users_latest.empty else set()
+    if not total_uids_set and df_all is not None and not df_all.empty:
+        total_uids_set = set([u for u in df_all["uid"].astype(str).unique().tolist() if str(u).strip()])
+    total_cnt = len(total_uids_set)
 
-    # 교구별 참여 인원(등록된 UID 기준)
-    wk_counts = du[du["uid"].isin(active_wk_uids)].groupby("member_district")["uid"].nunique().to_dict() if not du.empty else {}
-    m_counts = du[du["uid"].isin(active_m_uids)].groupby("member_district")["uid"].nunique().to_dict() if not du.empty else {}
+    r_wk = (len(active_week) / total_cnt) if total_cnt else 0.0
+    r_m = (len(active_month) / total_cnt) if total_cnt else 0.0
 
-    # users 시트에 없는 UID 참여는 '미입력'으로 합산
-    wk_unknown = len([u for u in active_wk_uids if u and u not in reg_uids])
-    m_unknown = len([u for u in active_m_uids if u and u not in reg_uids])
-    if wk_unknown:
-        wk_counts["미입력"] = wk_counts.get("미입력", 0) + wk_unknown
-    if m_unknown:
-        m_counts["미입력"] = m_counts.get("미입력", 0) + m_unknown
+    st.markdown("### ✅ 공개 참여 현황")
+    k1, k2, k3 = st.columns(3)
+    k1.metric("이번 주 참여(완료 1회 이상)", f"{len(active_week)}명", f"{r_wk:.0%}")
+    k2.metric("이번 달 참여(완료 1회 이상)", f"{len(active_month)}명", f"{r_m:.0%}")
+    k3.metric("전체 UID 수(users 기준)", f"{total_cnt}명")
 
-    # 한 줄 요약(제목 아래)
-    reg_summary = " / ".join([f"{d} {int(reg_counts.get(d, 0))}명" for d in DISTRICTS])
-    if int(reg_counts.get("미입력", 0)) > 0:
-        reg_summary += f" / 미입력 {int(reg_counts.get('미입력', 0))}명"
-    st.caption(f"📣 공개 참여 현황(교구별 등록 인원): {reg_summary}")
-
-    # 테이블 요약
-    rows = []
-    for d in (DISTRICTS + ["미입력"]):
-        if d == "미입력" and (d not in reg_counts and d not in wk_counts and d not in m_counts):
-            continue
-        rows.append({
-            "교구": d,
-            "등록 성도": int(reg_counts.get(d, 0)),
-            "이번 주 참여": int(wk_counts.get(d, 0)),
-            "이번 달 참여": int(m_counts.get(d, 0)),
-        })
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    # 최신 프로필(users 시트 우선, 없으면 기록 기준 최신값으로 보완)
-    st.caption("완료일수 = 선택한 월에서 ✅ '완료'가 체크된 날짜 수(중복 날짜 제외)입니다. 동일 이름이 여러 줄로 보이면 UID가 서로 다른 경우일 수 있습니다.")
-    df_users_all2 = cached_all_users_df()
-    if not df_users_all2.empty:
-        u2 = df_users_all2.copy()
-        u2["uid"] = u2["uid"].astype(str).str.strip()
-        u2 = u2[u2["uid"] != ""]
-        u2["_t"] = pd.to_datetime(u2.get("updated_at", ""), errors="coerce")
-        u2 = u2.sort_values(["uid", "_t"])
-        u2 = u2.groupby("uid", as_index=False).tail(1)
-        u2["member_district"] = u2.get("member_district", "").fillna("").astype(str).str.strip()
-        u2.loc[~u2["member_district"].isin(DISTRICTS), "member_district"] = "미입력"
-        u2 = u2.rename(columns={
-            "member_role": "member_role_u",
-            "member_name": "member_name_u",
-        })
-        u2 = u2[["uid", "member_district", "member_role_u", "member_name_u"]].copy()
+    # 교구별 등록/참여
+    if users_latest.empty:
+        st.caption("교구별 통계를 보려면 users 시트에 성도 정보(교구/직분/이름)가 저장되어 있어야 합니다.")
     else:
-        u2 = pd.DataFrame(columns=["uid", "member_district", "member_role_u", "member_name_u"])
+        u = users_latest.copy()
+        u["member_district"] = u["member_district"].fillna("").astype(str)
+        u["_dist"] = u["member_district"].replace("", "미입력")
 
-    latest = df_all.copy()
-    latest["_t"] = pd.to_datetime(latest["updated_at"], errors="coerce")
-    latest = latest.sort_values(["uid", "_t"])
-    prof_r = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
-    prof_r["member_role_r"] = prof_r["member_role"].fillna("").astype(str)
-    prof_r["member_name_r"] = prof_r["member_name"].fillna("").astype(str)
-    prof_r = prof_r[["uid", "member_role_r", "member_name_r"]]
+        reg = u.groupby("_dist", as_index=False)["uid"].nunique().rename(columns={"uid": "등록인원"})
+        reg_map = dict(zip(reg["_dist"], reg["등록인원"]))
 
-    prof = u2.merge(prof_r, on="uid", how="outer")
-    # users 값 우선
-    prof["member_role"] = prof["member_role_u"].where(prof["member_role_u"].astype(str).str.strip() != "", prof["member_role_r"])
-    prof["member_name"] = prof["member_name_u"].where(prof["member_name_u"].astype(str).str.strip() != "", prof["member_name_r"])
-    prof["member_district"] = prof.get("member_district", "").fillna("").astype(str).str.strip()
-    prof.loc[~prof["member_district"].isin(DISTRICTS), "member_district"] = "미입력"
+        uid_to_dist = dict(zip(u["uid"].astype(str), u["_dist"].astype(str)))
 
-    # 월 기준 참여일수
-    dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
-    dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
-    cnts = dmonth[dmonth["completed_bool"]].groupby("uid", as_index=False)["day"].nunique().rename(columns={"day": "완료일수"})
-    merged = prof.merge(cnts, on="uid", how="left")
-    merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
+        def _dist_counts(uids: set) -> dict:
+            out = {d: 0 for d in DISTRICTS}
+            out["미입력"] = 0
+            for x in uids:
+                d = uid_to_dist.get(str(x), "미입력") or "미입력"
+                if d not in out:
+                    out["미입력"] += 1
+                else:
+                    out[d] += 1
+            return out
 
-    view_part = merged.rename(columns={"uid": "UID", "member_district": "교구", "member_role": "직분", "member_name": "성도 이름"})
-    view_part = view_part[["UID", "교구", "직분", "성도 이름", "완료일수"]].sort_values(["교구", "직분", "성도 이름"], na_position="last")
-    st.dataframe(view_part, use_container_width=True, hide_index=True)
+        wk_dc = _dist_counts(active_week)
+        m_dc = _dist_counts(active_month)
 
+        def _fmt(d: dict) -> str:
+            parts = []
+            # 고정 순서(1~4교구, 미입력)
+            for k in (DISTRICTS + ["미입력"]):
+                parts.append(f"{k} {int(d.get(k, 0))}명")
+            return " / ".join(parts)
+
+        st.caption("교구별 등록 인원: " + _fmt(reg_map))
+        st.caption("이번 주 교구별 참여: " + _fmt(wk_dc))
+        st.caption("이번 달 교구별 참여: " + _fmt(m_dc))
+
+    # -------------------------
+    # 성도 참여(월 기준) 표
+    # -------------------------
+    st.markdown("### 👥 성도 참여(월 기준)")
+    st.caption("완료일수 = 선택한 월에서 ✅완료 체크된 날짜 수(중복 날짜 제외)")
+
+    if df_all is None or df_all.empty:
+        st.info("QT 기록이 아직 없습니다. (users 시트에 등록된 성도 정보는 위에서 확인할 수 있습니다.)")
+        merged = users_latest.copy()
+        merged["완료일수"] = 0
+    else:
+        # 월 기준 참여일수(UID별)
+        dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
+        dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+        cnts = (
+            dmonth[dmonth["completed_bool"]]
+            .groupby("uid", as_index=False)["day"].nunique()
+            .rename(columns={"day": "완료일수"})
+        )
+
+        # 기록에서 최신 role/name (users 정보가 비어있을 때 보정용)
+        latest = df_all.copy()
+        latest["_t"] = pd.to_datetime(latest.get("updated_at", ""), errors="coerce")
+        latest = latest.sort_values(["uid", "_t"])
+        rec_prof = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
+        rec_prof["member_role"] = rec_prof["member_role"].fillna("").astype(str)
+        rec_prof["member_name"] = rec_prof["member_name"].fillna("").astype(str)
+
+        u_prof = users_latest.copy()
+        for c in ["member_district", "member_role", "member_name"]:
+            if c not in u_prof.columns:
+                u_prof[c] = ""
+            u_prof[c] = u_prof[c].fillna("").astype(str)
+
+        prof = u_prof.merge(rec_prof, on="uid", how="outer", suffixes=("_u", "_r"))
+        # prefer users sheet (u), fallback to records (r)
+        prof["member_district"] = prof.get("member_district", "").fillna("").astype(str)
+        prof["member_role"] = prof.get("member_role_u", "").replace("", pd.NA).fillna(prof.get("member_role_r", "")).fillna("").astype(str)
+        prof["member_name"] = prof.get("member_name_u", "").replace("", pd.NA).fillna(prof.get("member_name_r", "")).fillna("").astype(str)
+
+        merged = prof[["uid", "member_district", "member_role", "member_name"]].merge(cnts, on="uid", how="left")
+        merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
+
+    # 컬럼 정리: uid 다음 교구(요청사항)
+    col_order = [c for c in ["uid", "member_district", "member_role", "member_name", "완료일수"] if c in merged.columns]
+    merged2 = merged[col_order].copy()
+
+    st.dataframe(
+        merged2.sort_values(["완료일수", "member_name"], ascending=[False, True]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # 다운로드(선택 월 기준)
+    try:
+        csv_users = merged2.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "성도 참여 CSV 다운로드(선택 월)",
+            data=csv_users,
+            file_name=f"member_participation_{m_start.strftime('%Y%m')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    except Exception:
+        pass
 
     st.markdown("---")
     st.markdown("### 🙏 Pray together in the Lord (중보기도 요청)")
 
     dfp_all = cached_all_prayers_df()
-    if dfp_all.empty:
+    if dfp_all is None or dfp_all.empty:
         st.info("중보기도 요청이 아직 없습니다.")
-    else:
-        view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0)
+        return
 
-        dfp = dfp_all.copy()
-        dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
+    view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0)
 
-        dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
-        dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
-        dfp["_use_date"] = dfp["_linked_dt"].dt.date
-        dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
+    dfp = dfp_all.copy()
+    dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
 
-        # 월 필터(선택한 월 기준)
-        dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+    if view_mode == "공동체 중보(공개)":
+        dfp = dfp[dfp["is_public_bool"]]
 
-        if view_mode.startswith("공동체"):
-            dfp = dfp[dfp["is_public_bool"]]
+    dfp["_created_dt"] = pd.to_datetime(dfp.get("created_at", ""), errors="coerce")
+    dfp["_linked_dt"] = pd.to_datetime(dfp.get("linked_day", ""), errors="coerce")
+    dfp["_use_date"] = dfp["_linked_dt"].dt.date
+    dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
 
-        dfp = dfp.sort_values(by=["_created_dt"], ascending=False, na_position="last")
+    # 선택 월 필터
+    dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)]
 
-        view = dfp.rename(
-            columns={
-                "member_district": "교구",
-                "saints_info": "성도 정보",
-                "prayer_title": "기도 제목",
-                "prayer_content": "기도 내용",
-                "is_public_bool": "공동체 중보",
-                "linked_day": "연결 QT 날짜",
-                "created_at": "작성 시각",
-            }
-        )
+    view = pd.DataFrame()
+    view["교구"] = dfp.get("member_district", "").fillna("").astype(str)
+    view["성도 정보"] = dfp.get("saints_info", "").fillna("").astype(str)
+    view["기도 제목"] = dfp.get("prayer_title", "").fillna("").astype(str)
+    view["기도 내용"] = dfp.get("prayer_content", "").fillna("").astype(str)
+    view["공동체 중보"] = dfp["is_public_bool"].map(lambda x: "요청" if x else "")
+    view["연결 QT 날짜"] = dfp.get("linked_day", "").fillna("").astype(str)
+    view["작성 시각"] = dfp.get("created_at", "").fillna("").astype(str)
 
-        cols = [c for c in ["교구", "성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
-        st.dataframe(view[cols], use_container_width=True, hide_index=True)
+    show_cols = ["교구", "성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"]
+    st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
 
-        # 다운로드(선택 월 기준)
+    # 다운로드(선택 월 기준)
+    try:
         csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             "중보기도 CSV 다운로드(선택 월)",
@@ -1196,42 +1327,8 @@ def admin_dashboard():
             mime="text/csv",
             use_container_width=True,
         )
-
-        csv_all = dfp_all.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "중보기도 CSV 다운로드(전체 기간)",
-            data=csv_all,
-            file_name="intercessory_prayers_all.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 목회자/관리자 전용으로만 활용하세요.")
-
-    st.markdown("### ⬇️ 데이터 다운로드")
-    # 다운로드용 월 데이터에 교구 컬럼(가능하면 users 시트 기준) 추가
-    try:
-        df_users_dl = cached_all_users_df()
-        if not df_users_dl.empty and "member_district" in df_users_dl.columns:
-            df_users_dl["uid"] = df_users_dl["uid"].astype(str).str.strip()
-            df_users_dl["_t"] = pd.to_datetime(df_users_dl.get("updated_at", ""), errors="coerce")
-            df_users_dl = df_users_dl.sort_values(["uid", "_t"]).groupby("uid", as_index=False).tail(1)
-            dmonth_dl = dmonth.merge(df_users_dl[["uid", "member_district"]], on="uid", how="left")
-        else:
-            dmonth_dl = dmonth.copy()
     except Exception:
-        dmonth_dl = dmonth.copy()
-
-    csv = dmonth_dl.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "월 데이터 CSV 다운로드",
-        data=csv,
-        file_name=f"qti_records_{m_start.strftime('%Y%m')}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-    st.caption("※ 이름이 비어있는 UID는 성도님이 성도 정보를 아직 저장하지 않은 경우입니다.")
-
+        pass
 
 # -------------------------
 # 앱 시작
@@ -1307,27 +1404,27 @@ label, .stMarkdown, .stText, .stCaption, .stRadio, .stSelectbox, .stTextInput, .
 )
 apply_css()
 
-storage = get_storage(APP_BUILD)
-_REQUIRED_STORAGE_METHODS = ("load_month", "get_profile", "upsert_one", "fetch_all_records_df", "fetch_all_prayers_df", "upsert_profile", "insert_prayer_request")
-def _storage_ok(obj) -> bool:
-    return (obj is not None) and all(hasattr(obj, m) for m in _REQUIRED_STORAGE_METHODS)
-
-if not _storage_ok(storage):
-    # 캐시가 꼬였거나(배포 교체), secrets/권한 문제가 있는 경우를 대비해 한 번 더 재초기화 시도
-    try:
-        get_storage.clear()
-    except Exception:
-        pass
-    storage = get_storage(APP_BUILD + "_reset")
-
-if not _storage_ok(storage):
-    st.error("구글 시트 저장소 초기화에 실패했습니다. (Secrets/권한/라이브러리/캐시 상태를 확인해주세요.)")
+storage = get_storage()
+if not storage:
+    st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
     st.stop()
 
 st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
 st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
 
-mode = st.radio("모드 선택", ["성도님(기록하기)", "관리자(대시보드)"], horizontal=True)
+
+# -------------------------
+# 상단 메뉴(대표 링크 지원)
+# -------------------------
+if "top_menu" not in st.session_state:
+    st.session_state["top_menu"] = "내 UID 주소 확인" if "uid" not in st.query_params else "성도 정보 입력/기록"
+
+mode = st.radio(
+    "메뉴",
+    ["성도 정보 입력/기록", "내 UID 주소 확인", "관리자(대시보드)"],
+    horizontal=True,
+    key="top_menu",
+)
 
 # 관리자
 if mode == "관리자(대시보드)":
@@ -1335,20 +1432,36 @@ if mode == "관리자(대시보드)":
         admin_dashboard()
     st.stop()
 
+# 내 UID 주소 확인
+if mode == "내 UID 주소 확인":
+    uid_lookup_page()
+    st.stop()
+
 # -------------------------
-# 성도님 모드
+# 성도님 모드(기록)
 # -------------------------
 
 # UID 관리
 if "uid" not in st.query_params:
-    st.info("### 🙏 큐티 체크리스트 시작하기\n성도님 전용 기록지를 만들기 위해 아래 버튼을 눌러주세요.")
-    if st.button("🚀 나의 큐티 링크 만들기 (처음 1회)", use_container_width=True):
-        new_uid = secrets.token_urlsafe(8)
-        st.query_params["uid"] = new_uid
-        st.rerun()
+    st.info(
+        "### 🙏 큐티 체크리스트 시작하기\n"
+        "교회에서 이미 UID가 발급되었다면 **'내 UID 주소 확인'**에서 이름으로 찾아 접속해 주세요.\n"
+        "처음이거나 아직 UID가 없으면 아래에서 새 UID로 시작할 수 있습니다."
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔎 내 UID 주소 확인하기", use_container_width=True):
+            st.session_state["top_menu"] = "내 UID 주소 확인"
+            st.rerun()
+    with c2:
+        if st.button("🆕 새 UID로 시작하기(신규)", use_container_width=True):
+            new_uid = secrets.token_urlsafe(8)
+            st.query_params["uid"] = new_uid
+            st.rerun()
     st.stop()
 
 uid = st.query_params["uid"]
+
 
 # 기본 상태 초기화
 if "picked_day" not in st.session_state:
