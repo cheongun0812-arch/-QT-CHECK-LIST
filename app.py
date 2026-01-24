@@ -1128,271 +1128,271 @@ def admin_dashboard():
     a_m, _, r_m = compute_participation(df_all, m_start, m_end)
 
     
-st.markdown("### ✅ 참여 현황")
-
-# 2/3: 전체 UID 수 / 이번 달 참여 / 이번 주 참여
-# 1/3: 교구별 참여 (교구, UID수, 월참여(참여율), 주참여(참여율))
-left_area, right_area = st.columns([2, 1])
-
-with left_area:
-    c_total, c_month, c_week = st.columns(3)
-    c_total.metric("전체 UID 수", f"{t_all}명")
-    c_month.metric("이번 달 참여", f"{a_m}명", f"참여율 {r_m:.0%}")
-    c_week.metric("이번 주 참여", f"{a_wk}명", f"참여율 {r_wk:.0%}")
-
-with right_area:
-    st.markdown("#### 교구별 참여")
-    st.caption("Parish / Participant(UID) / Monthly participation(%) / Weekly participation(%)")
-
-    # uid -> 교구(Users 시트 기반)
-    df_users = cached_all_users_df()
-
-    uid_base = pd.DataFrame({"uid": df_all["uid"].astype(str).unique()})
-    uid_base["member_district"] = ""
-
-    if df_users is not None and not df_users.empty:
-        du = df_users.copy()
-        if "uid" in du.columns:
-            du["uid"] = du["uid"].astype(str)
+    st.markdown("### ✅ 참여 현황")
+    
+    # 2/3: 전체 UID 수 / 이번 달 참여 / 이번 주 참여
+    # 1/3: 교구별 참여 (교구, UID수, 월참여(참여율), 주참여(참여율))
+    left_area, right_area = st.columns([2, 1])
+    
+    with left_area:
+        c_total, c_month, c_week = st.columns(3)
+        c_total.metric("전체 UID 수", f"{t_all}명")
+        c_month.metric("이번 달 참여", f"{a_m}명", f"참여율 {r_m:.0%}")
+        c_week.metric("이번 주 참여", f"{a_wk}명", f"참여율 {r_wk:.0%}")
+    
+    with right_area:
+        st.markdown("#### 교구별 참여")
+        st.caption("Parish / Participant(UID) / Monthly participation(%) / Weekly participation(%)")
+    
+        # uid -> 교구(Users 시트 기반)
+        df_users = cached_all_users_df()
+    
+        uid_base = pd.DataFrame({"uid": df_all["uid"].astype(str).unique()})
+        uid_base["member_district"] = ""
+    
+        if df_users is not None and not df_users.empty:
+            du = df_users.copy()
+            if "uid" in du.columns:
+                du["uid"] = du["uid"].astype(str)
+            else:
+                du["uid"] = ""
+            du["_t"] = pd.to_datetime(du.get("updated_at", ""), errors="coerce")
+            du = du.sort_values(["uid", "_t"], ascending=[True, True])
+            du = du.groupby("uid", as_index=False).tail(1)
+    
+            du["member_district"] = du.get("member_district", "").fillna("").astype(str).map(normalize_district)
+    
+            uid_base = uid_base.merge(du[["uid", "member_district"]], on="uid", how="left", suffixes=("", "_u"))
+            if "member_district_u" in uid_base.columns:
+                uid_base["member_district"] = uid_base["member_district_u"]
+                uid_base = uid_base.drop(columns=["member_district_u"])
+    
+        uid_base["member_district"] = uid_base["member_district"].fillna("").astype(str).str.strip()
+        uid_base.loc[uid_base["member_district"] == "", "member_district"] = "(미입력)"
+    
+        def _active_uid_set(start: date, end: date) -> set[str]:
+            dfx = df_all[(df_all["day"] >= start.isoformat()) & (df_all["day"] <= end.isoformat())].copy()
+            dfx["completed_bool"] = dfx["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+            dfx = dfx[dfx["completed_bool"]]
+            return set(dfx["uid"].astype(str).unique().tolist())
+    
+        active_month = _active_uid_set(m_start, m_end)
+        active_week = _active_uid_set(wk_start, wk_end)
+    
+        uid_base["month_active"] = uid_base["uid"].isin(active_month)
+        uid_base["week_active"] = uid_base["uid"].isin(active_week)
+    
+        g = uid_base.groupby("member_district", as_index=False).agg(
+            total_uid=("uid", "nunique"),
+            month_uid=("month_active", "sum"),
+            week_uid=("week_active", "sum"),
+        )
+    
+        g["month_rate"] = g.apply(lambda r: (r["month_uid"] / r["total_uid"]) if r["total_uid"] else 0.0, axis=1)
+        g["week_rate"] = g.apply(lambda r: (r["week_uid"] / r["total_uid"]) if r["total_uid"] else 0.0, axis=1)
+    
+        view = pd.DataFrame({
+            "Parish": g["member_district"],
+            "Participant (UID)": g["total_uid"].astype(int),
+            "Monthly participation": g.apply(lambda r: f'{int(r["month_uid"])}명 ({r["month_rate"]:.0%})', axis=1),
+            "Weekly participation": g.apply(lambda r: f'{int(r["week_uid"])}명 ({r["week_rate"]:.0%})', axis=1),
+        }).sort_values(["Participant (UID)", "Parish"], ascending=[False, True]).reset_index(drop=True)
+    
+        st.dataframe(view, use_container_width=True, hide_index=True)
+    
+        # 최신 프로필(기록 기준 최신값)
+        latest = df_all.copy()
+        latest["_t"] = pd.to_datetime(latest["updated_at"], errors="coerce")
+        latest = latest.sort_values(["uid", "_t"])
+        prof = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
+        prof["member_role"] = prof["member_role"].fillna("").astype(str)
+        prof["member_name"] = prof["member_name"].fillna("").astype(str)
+    
+        # 월 기준 참여일수
+        dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
+        dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+        cnts = dmonth[dmonth["completed_bool"]].groupby("uid", as_index=False)["day"].nunique().rename(columns={"day": "완료일수"})
+        merged = prof.merge(cnts, on="uid", how="left")
+        merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
+    
+        st.markdown("### 👥 성도 참여(월 기준)")
+        st.dataframe(
+            merged.sort_values(["완료일수", "member_name"], ascending=[False, True]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    
+    
+        st.markdown("---")
+        st.markdown("### 🙏 중보기도 요청(Pray together in the Lord)")
+    
+        dfp_all = cached_all_prayers_df()
+        if dfp_all.empty:
+            st.info("중보기도 요청이 아직 없습니다.")
         else:
-            du["uid"] = ""
-        du["_t"] = pd.to_datetime(du.get("updated_at", ""), errors="coerce")
-        du = du.sort_values(["uid", "_t"], ascending=[True, True])
-        du = du.groupby("uid", as_index=False).tail(1)
-
-        du["member_district"] = du.get("member_district", "").fillna("").astype(str).map(normalize_district)
-
-        uid_base = uid_base.merge(du[["uid", "member_district"]], on="uid", how="left", suffixes=("", "_u"))
-        if "member_district_u" in uid_base.columns:
-            uid_base["member_district"] = uid_base["member_district_u"]
-            uid_base = uid_base.drop(columns=["member_district_u"])
-
-    uid_base["member_district"] = uid_base["member_district"].fillna("").astype(str).str.strip()
-    uid_base.loc[uid_base["member_district"] == "", "member_district"] = "(미입력)"
-
-    def _active_uid_set(start: date, end: date) -> set[str]:
-        dfx = df_all[(df_all["day"] >= start.isoformat()) & (df_all["day"] <= end.isoformat())].copy()
-        dfx["completed_bool"] = dfx["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
-        dfx = dfx[dfx["completed_bool"]]
-        return set(dfx["uid"].astype(str).unique().tolist())
-
-    active_month = _active_uid_set(m_start, m_end)
-    active_week = _active_uid_set(wk_start, wk_end)
-
-    uid_base["month_active"] = uid_base["uid"].isin(active_month)
-    uid_base["week_active"] = uid_base["uid"].isin(active_week)
-
-    g = uid_base.groupby("member_district", as_index=False).agg(
-        total_uid=("uid", "nunique"),
-        month_uid=("month_active", "sum"),
-        week_uid=("week_active", "sum"),
-    )
-
-    g["month_rate"] = g.apply(lambda r: (r["month_uid"] / r["total_uid"]) if r["total_uid"] else 0.0, axis=1)
-    g["week_rate"] = g.apply(lambda r: (r["week_uid"] / r["total_uid"]) if r["total_uid"] else 0.0, axis=1)
-
-    view = pd.DataFrame({
-        "Parish": g["member_district"],
-        "Participant (UID)": g["total_uid"].astype(int),
-        "Monthly participation": g.apply(lambda r: f'{int(r["month_uid"])}명 ({r["month_rate"]:.0%})', axis=1),
-        "Weekly participation": g.apply(lambda r: f'{int(r["week_uid"])}명 ({r["week_rate"]:.0%})', axis=1),
-    }).sort_values(["Participant (UID)", "Parish"], ascending=[False, True]).reset_index(drop=True)
-
-    st.dataframe(view, use_container_width=True, hide_index=True)
-
-    # 최신 프로필(기록 기준 최신값)
-    latest = df_all.copy()
-    latest["_t"] = pd.to_datetime(latest["updated_at"], errors="coerce")
-    latest = latest.sort_values(["uid", "_t"])
-    prof = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
-    prof["member_role"] = prof["member_role"].fillna("").astype(str)
-    prof["member_name"] = prof["member_name"].fillna("").astype(str)
-
-    # 월 기준 참여일수
-    dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
-    dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
-    cnts = dmonth[dmonth["completed_bool"]].groupby("uid", as_index=False)["day"].nunique().rename(columns={"day": "완료일수"})
-    merged = prof.merge(cnts, on="uid", how="left")
-    merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
-
-    st.markdown("### 👥 성도 참여(월 기준)")
-    st.dataframe(
-        merged.sort_values(["완료일수", "member_name"], ascending=[False, True]),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
-    st.markdown("---")
-    st.markdown("### 🙏 중보기도 요청(Pray together in the Lord)")
-
-    dfp_all = cached_all_prayers_df()
-    if dfp_all.empty:
-        st.info("중보기도 요청이 아직 없습니다.")
-    else:
-        view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0)
-
-        dfp = dfp_all.copy()
-        dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
-
-        dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
-        dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
-        dfp["_use_date"] = dfp["_linked_dt"].dt.date
-        dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
-
-        # 월 필터(선택한 월 기준)
-        dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
-
-        if view_mode.startswith("공동체"):
-            dfp = dfp[dfp["is_public_bool"]]
-
-        dfp = dfp.sort_values(by=["_created_dt"], ascending=False, na_position="last")
-
-        view = dfp.rename(
-            columns={
-                "saints_info": "성도 정보",
-                "prayer_title": "기도 제목",
-                "prayer_content": "기도 내용",
-                "is_public_bool": "공동체 중보",
-                "linked_day": "연결 QT 날짜",
-                "created_at": "작성 시각",
-            }
-        )
-
-        cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
-        st.dataframe(view[cols], use_container_width=True, hide_index=True)
-
-        # 다운로드(선택 월 기준)
-        csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
+            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0)
+    
+            dfp = dfp_all.copy()
+            dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
+    
+            dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
+            dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
+            dfp["_use_date"] = dfp["_linked_dt"].dt.date
+            dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
+    
+            # 월 필터(선택한 월 기준)
+            dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+    
+            if view_mode.startswith("공동체"):
+                dfp = dfp[dfp["is_public_bool"]]
+    
+            dfp = dfp.sort_values(by=["_created_dt"], ascending=False, na_position="last")
+    
+            view = dfp.rename(
+                columns={
+                    "saints_info": "성도 정보",
+                    "prayer_title": "기도 제목",
+                    "prayer_content": "기도 내용",
+                    "is_public_bool": "공동체 중보",
+                    "linked_day": "연결 QT 날짜",
+                    "created_at": "작성 시각",
+                }
+            )
+    
+            cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
+            st.dataframe(view[cols], use_container_width=True, hide_index=True)
+    
+            # 다운로드(선택 월 기준)
+            csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "중보기도 CSV 다운로드(선택 월)",
+                data=csv_p,
+                file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+    
+            csv_all = dfp_all.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "중보기도 CSV 다운로드(전체 기간)",
+                data=csv_all,
+                file_name="intercessory_prayers_all.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+    
+        st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 교구장/목회자/관리자 전용으로만 활용하세요.")
+    
+        st.markdown("### ⬇️ 데이터 다운로드")
+        csv = dmonth.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
-            "중보기도 CSV 다운로드(선택 월)",
-            data=csv_p,
-            file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv",
+            "월 데이터 CSV 다운로드",
+            data=csv,
+            file_name=f"qti_records_{m_start.strftime('%Y%m')}.csv",
             mime="text/csv",
             use_container_width=True,
         )
-
-        csv_all = dfp_all.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "중보기도 CSV 다운로드(전체 기간)",
-            data=csv_all,
-            file_name="intercessory_prayers_all.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 교구장/목회자/관리자 전용으로만 활용하세요.")
-
-    st.markdown("### ⬇️ 데이터 다운로드")
-    csv = dmonth.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "월 데이터 CSV 다운로드",
-        data=csv,
-        file_name=f"qti_records_{m_start.strftime('%Y%m')}.csv",
-        mime="text/csv",
-        use_container_width=True,
+        st.caption("※ 이름이 비어있는 UID는 성도님이 정보를 아직 저장하지 않은 경우입니다.")
+    
+    
+    # -------------------------
+    # 앱 시작
+    # -------------------------
+    st.set_page_config(page_title="Ye-eun's scent created with Ju-manna", layout="wide")
+    st.sidebar.caption(f"build: {APP_BUILD}")
+    
+    # --- Responsive UI (PC/Mobile) ---
+    st.markdown(
+        """
+    <style>
+    /* Base (desktop/tablet) */
+    html, body, [class*="css"] { font-size: 16px; }
+    h1 { 
+      font-size: 2.0rem !important;
+      line-height: 1.2 !important;
+      margin-bottom: 0.25rem !important;
+    }
+    
+    /* 모바일에서는 더 작게 */
+    @media (max-width: 640px) {
+      h1 {
+        font-size: 1.05rem !important;
+      }
+    }
+    
+    h2 { font-size: 1.15rem; line-height: 1.25; }
+    h3 { font-size: 1.10rem; line-height: 1.25; }
+    
+    .stButton button {
+      font-size: 0.95rem;
+      padding: 0.45rem 0.75rem;
+    }
+    
+    label, .stMarkdown, .stText, .stCaption, .stRadio, .stSelectbox, .stTextInput, .stDateInput {
+      font-size: 0.95rem;
+    }
+    
+    .block-container { padding-top: 1.0rem; padding-bottom: 2.0rem; }
+    
+    /* Mobile */
+    @media (max-width: 640px) {
+      html, body, [class*="css"] { font-size: 13px; }
+    
+      h1 { font-size: 1.2rem; }
+      h2 { font-size: 1.10rem; }
+      h3 { font-size: 1.00rem; }
+    
+      .stButton button {
+        font-size: 0.85rem;
+        padding: 0.35rem 0.6rem;
+        border-radius: 10px;
+      }
+    
+      label, .stMarkdown, .stText, .stCaption { font-size: 0.88rem; }
+    
+      .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+    
+      div[data-baseweb="select"] > div { min-height: 36px; }
+      input, textarea { font-size: 0.90rem !important; }
+    
+      .stDataFrame { overflow-x: auto; }
+    }
+    
+    /* Very small phones */
+    @media (max-width: 380px) {
+      html, body, [class*="css"] { font-size: 12.5px; }
+      .stButton button { font-size: 0.82rem; padding: 0.32rem 0.55rem; }
+    }
+    </style>
+        """,
+        unsafe_allow_html=True
     )
-    st.caption("※ 이름이 비어있는 UID는 성도님이 정보를 아직 저장하지 않은 경우입니다.")
-
-
-# -------------------------
-# 앱 시작
-# -------------------------
-st.set_page_config(page_title="Ye-eun's scent created with Ju-manna", layout="wide")
-st.sidebar.caption(f"build: {APP_BUILD}")
-
-# --- Responsive UI (PC/Mobile) ---
-st.markdown(
-    """
-<style>
-/* Base (desktop/tablet) */
-html, body, [class*="css"] { font-size: 16px; }
-h1 { 
-  font-size: 2.0rem !important;
-  line-height: 1.2 !important;
-  margin-bottom: 0.25rem !important;
-}
-
-/* 모바일에서는 더 작게 */
-@media (max-width: 640px) {
-  h1 {
-    font-size: 1.05rem !important;
-  }
-}
-
-h2 { font-size: 1.15rem; line-height: 1.25; }
-h3 { font-size: 1.10rem; line-height: 1.25; }
-
-.stButton button {
-  font-size: 0.95rem;
-  padding: 0.45rem 0.75rem;
-}
-
-label, .stMarkdown, .stText, .stCaption, .stRadio, .stSelectbox, .stTextInput, .stDateInput {
-  font-size: 0.95rem;
-}
-
-.block-container { padding-top: 1.0rem; padding-bottom: 2.0rem; }
-
-/* Mobile */
-@media (max-width: 640px) {
-  html, body, [class*="css"] { font-size: 13px; }
-
-  h1 { font-size: 1.2rem; }
-  h2 { font-size: 1.10rem; }
-  h3 { font-size: 1.00rem; }
-
-  .stButton button {
-    font-size: 0.85rem;
-    padding: 0.35rem 0.6rem;
-    border-radius: 10px;
-  }
-
-  label, .stMarkdown, .stText, .stCaption { font-size: 0.88rem; }
-
-  .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
-
-  div[data-baseweb="select"] > div { min-height: 36px; }
-  input, textarea { font-size: 0.90rem !important; }
-
-  .stDataFrame { overflow-x: auto; }
-}
-
-/* Very small phones */
-@media (max-width: 380px) {
-  html, body, [class*="css"] { font-size: 12.5px; }
-  .stButton button { font-size: 0.82rem; padding: 0.32rem 0.55rem; }
-}
-</style>
-    """,
-    unsafe_allow_html=True
-)
-apply_css()
-
-storage = get_storage()
-if not storage:
-    st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
-    st.stop()
-
-st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
-st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나를 통해 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
-
-
-# -------------------------
-# UID 찾기 화면에서 '이 링크로 기록하기로 이동'을 눌렀을 때
-# (라디오 위젯이 생성되기 전에) uid 쿼리파라미터와 모드 값을 안전하게 적용
-# -------------------------
-goto_uid = st.session_state.pop("__goto_record_uid", None)
-if goto_uid:
-    try:
-        st.query_params["uid"] = goto_uid
-    except Exception:
-        st.experimental_set_query_params(uid=goto_uid)
-
-    # 라디오 위젯 생성 전에 값 세팅 (안전)
-    st.session_state["mode_select"] = "성도님(기록하기)"
-    st.rerun()
-
+    apply_css()
+    
+    storage = get_storage()
+    if not storage:
+        st.error("구글 시트 설정(Secrets) 또는 gspread 라이브러리를 확인해주세요.")
+        st.stop()
+    
+    st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
+    st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나를 통해 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
+    
+    
+    # -------------------------
+    # UID 찾기 화면에서 '이 링크로 기록하기로 이동'을 눌렀을 때
+    # (라디오 위젯이 생성되기 전에) uid 쿼리파라미터와 모드 값을 안전하게 적용
+    # -------------------------
+    goto_uid = st.session_state.pop("__goto_record_uid", None)
+    if goto_uid:
+        try:
+            st.query_params["uid"] = goto_uid
+        except Exception:
+            st.experimental_set_query_params(uid=goto_uid)
+    
+        # 라디오 위젯 생성 전에 값 세팅 (안전)
+        st.session_state["mode_select"] = "성도님(기록하기)"
+        st.rerun()
+    
 mode = st.radio("모드 선택", ["성도님(기록하기)", "내 UID 접속 주소 찾기", "관리자(대시보드)"], horizontal=True, key="mode_select")
 
 # 관리자
