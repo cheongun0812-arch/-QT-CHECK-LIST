@@ -1504,9 +1504,9 @@ with st.container(border=True):
         st.session_state["prayer_note_input"] = cur_note[:50]
 
     memo = st.text_area(
-        "경건의 시간 하나님 앞에 서 있는 모습으로 한 줄 묵상 기도를 적어 보세요.",
+        "경건의 시간 하나님 앞에 서 있는 내 모습을 생각하며 한 줄 묵상 기도를 적어 보세요.",
         height=90,
-        max_chars=50,
+        max_chars=300,
         placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
         key="prayer_note_input",
     )
@@ -1596,7 +1596,7 @@ with st.container(border=True):
         st.text_area(
             "기도 내용(선택, 300자 이내)",
             height=120,
-            max_chars=300,
+            max_chars=500,
             placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
             key="pray_content",
         )
