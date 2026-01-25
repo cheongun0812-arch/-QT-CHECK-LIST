@@ -1239,10 +1239,13 @@ def admin_dashboard():
         use_container_width=True,
     )
 
-    # --- [레이아웃 개선] 중보기도 요청(6) : QT 주소 저장(4) ---
+    # --- [하단 레이아웃 개선] 중보기도(6) : 주소저장(4) ---
     st.markdown("---")
+    
+    # 하나의 행을 6:4 비율로 생성
     footer_col1, footer_col2 = st.columns([6, 4])
 
+    # 왼쪽 6할: 중보기도 요청 목록
     with footer_col1:
         st.markdown("### 🙏 중보기도 요청")
         st.caption("Pray together in the Lord")
@@ -1251,7 +1254,9 @@ def admin_dashboard():
         if dfp_all.empty:
             st.info("중보기도 요청이 아직 없습니다.")
         else:
-            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_pray_view")
+            # 관리자용 보기 옵션 선택
+            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_pray_view_final")
+            
             dfp = dfp_all.copy()
             dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
             dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
@@ -1259,12 +1264,15 @@ def admin_dashboard():
             dfp["_use_date"] = dfp["_linked_dt"].dt.date
             dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
 
-            # 현재 선택된 월 기준으로 필터링
+            # 선택된 월 기준 필터링 (m_start, m_end 사용)
             dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+            
             if view_mode.startswith("공동체"):
                 dfp = dfp[dfp["is_public_bool"]]
+            
             dfp = dfp.sort_values(by=["_created_dt"], ascending=False)
 
+            # 표 구성
             view = dfp.rename(columns={
                 "saints_info": "성도 정보", "prayer_title": "기도 제목", "prayer_content": "기도 내용",
                 "is_public_bool": "공동체 중보", "linked_day": "연결 QT 날짜", "created_at": "작성 시각"
@@ -1272,43 +1280,49 @@ def admin_dashboard():
             cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
             st.dataframe(view[cols], use_container_width=True, hide_index=True)
 
+            # 다운로드 버튼
             csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
-            st.download_button("중보기도 CSV 다운로드(선택 월)", data=csv_p, file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
+            st.download_button("중보기도 CSV 다운로드", data=csv_p, file_name=f"prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
 
+    # 오른쪽 4할: 나의 QT 주소 저장 패널
     with footer_col2:
-        # 나의 QT 접속 주소 저장 패널
+        # 주소 빌드
         share_url = build_share_url(uid)
+        
+        # 시각적으로 정렬을 맞추기 위해 상단 여백을 조금 줍니다.
+        st.write("") 
+        st.write("")
         st.markdown(
             f"""
-            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; border: 1px solid #dee2e6;">
-                <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 10px; color: #1c3d5a;">📌 나의 QT 주소 저장</div>
-                <div style="font-size: 0.9rem; line-height: 1.6; color: #495057; margin-bottom: 15px;">
-                    이 주소는 성도님만의 고유 주소입니다.<br>
-                    브라우저 즐겨찾기에 등록하거나 카카오톡 '나와의 채팅방'에 복사해두시면 매일 편리하게 접속하실 수 있습니다.
+            <div style="background-color: #f8f9fa; padding: 25px; border-radius: 12px; border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <div style="font-weight: 800; font-size: 1.15rem; margin-bottom: 12px; color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px;">
+                    📌 나의 QT 주소 저장
                 </div>
-                <div style="background: white; padding: 10px; border: 1px dashed #adb5bd; border-radius: 5px; word-break: break-all; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px;">
+                <p style="font-size: 0.9rem; color: #6c757d; line-height: 1.5; margin-bottom: 20px;">
+                    성도님만의 고유 접속 주소입니다. 브라우저 즐겨찾기나 '나와의 채팅방'에 보관해 주세요.
+                </p>
+                <div style="background: #ffffff; padding: 12px; border: 1px dashed #3498db; border-radius: 6px; word-break: break-all; font-family: 'Courier New', monospace; font-size: 0.85rem; color: #2980b9; margin-bottom: 15px;">
                     {share_url}
                 </div>
-                <div style="text-align: center; font-size: 0.8rem; color: #6c757d;">
-                    ※ 이 주소를 분실하시면 기존 기록을 찾기 어려울 수 있으니 꼭 보관해 주세요.
+                <div style="text-align: center; font-size: 0.8rem; color: #e74c3c; font-weight: 600;">
+                    ※ 주소를 잊으시면 기존 기록 확인이 어렵습니다.
                 </div>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    # 최하단 데이터 다운로드 버튼 (중앙 정렬 느낌을 위해 한 줄 차지)
+    # 최하단 원본 데이터 다운로드 (전체 너비 사용)
     st.markdown("---")
     st.markdown("### ⬇️ 월간 원본 데이터 백업")
-    csv = dmonth.to_csv(index=False).encode("utf-8-sig")
+    csv_raw = dmonth.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         "선택한 월 전체 데이터(CSV) 다운로드",
-        data=csv,
+        data=csv_raw,
         file_name=f"qti_records_{m_start.strftime('%Y%m')}.csv",
         mime="text/csv",
         use_container_width=True
     )
-
 
 # -------------------------
 # 앱 시작
