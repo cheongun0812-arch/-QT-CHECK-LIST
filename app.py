@@ -1092,7 +1092,6 @@ def compute_participation(df_all: pd.DataFrame, start: date, end: date) -> Tuple
     rate = (active / total) if total else 0.0
     return active, total, rate
 
-
 def admin_dashboard():
     st.header("📊 관리자 대시보드")
 
@@ -1101,11 +1100,23 @@ def admin_dashboard():
         st.info("기록이 아직 없습니다.")
         return
 
+    # --- [개선] 현재 날짜 기준 자동 월 선택 로직 ---
+    cur_now = today_kst()
+    cur_y, cur_m = cur_now.year, cur_now.month
+    
+    # 지원하는 월 목록 중 현재 달의 인덱스 찾기 (2월이 되면 자동으로 2월 선택)
+    default_month_idx = 0
+    for i, (yy, mm, lbl) in enumerate(SUPPORTED_MONTHS):
+        if yy == cur_y and mm == cur_m:
+            default_month_idx = i
+            break
+
     c1, c2 = st.columns([1, 1])
     with c1:
-        anchor = st.date_input("기준일(주간 통계)", value=today_kst())
+        anchor = st.date_input("기준일(주간 통계)", value=cur_now)
     with c2:
-        month_label = st.selectbox("월(요약/다운로드)", [m[2] for m in SUPPORTED_MONTHS])
+        # 월 선택 박스: 시스템 날짜에 따라 기본값이 자동으로 바뀜
+        month_label = st.selectbox("월(요약/다운로드)", [m[2] for m in SUPPORTED_MONTHS], index=default_month_idx)
 
     y, m = [(yy, mm) for (yy, mm, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
     m_start, m_end = month_range(y, m)
@@ -1113,12 +1124,14 @@ def admin_dashboard():
     wk_start = week_start_monday(anchor)
     wk_end = wk_start + timedelta(days=6)
 
-    a_wk, t_all, r_wk = compute_participation(df_all, wk_start, wk_end)
+    # 1. 월 참여(누적): 해당 월 전체 기간 기준
     a_m, _, r_m = compute_participation(df_all, m_start, m_end)
+    # 2. 주 참여(순수): 해당 주간 7일 기간 기준
+    a_wk, t_all, r_wk = compute_participation(df_all, wk_start, wk_end)
 
     st.markdown("### ✅ 참여 현황")
 
-    # 프로필(사용자 시트 우선, 없으면 기록 시트 최신값) - 교구/직분/이름 매핑 정확도 보장
+    # --- 성도 프로필 매핑 로직 ---
     df_users = cached_all_users_df()
     prof_users = pd.DataFrame(columns=["uid", "member_district", "member_role", "member_name"])
     if not df_users.empty:
@@ -1126,85 +1139,65 @@ def admin_dashboard():
         u["_t"] = pd.to_datetime(u.get("updated_at"), errors="coerce")
         u = u.sort_values(["uid", "_t"])
         prof_users = u.groupby("uid", as_index=False).tail(1)[["uid", "member_district", "member_role", "member_name"]].copy()
-        prof_users["uid"] = prof_users["uid"].fillna("").astype(str)
-        prof_users["member_district"] = prof_users["member_district"].fillna("").astype(str)
-        prof_users["member_role"] = prof_users["member_role"].fillna("").astype(str)
-        prof_users["member_name"] = prof_users["member_name"].fillna("").astype(str)
+        for c in prof_users.columns: prof_users[c] = prof_users[c].fillna("").astype(str)
 
-    # 기록 시트 최신값(직분/이름 백업용)
     latest = df_all.copy()
     latest["_t"] = pd.to_datetime(latest["updated_at"], errors="coerce")
     latest = latest.sort_values(["uid", "_t"])
     prof_rec = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
-    prof_rec["uid"] = prof_rec["uid"].fillna("").astype(str)
-    prof_rec["member_role"] = prof_rec["member_role"].fillna("").astype(str)
-    prof_rec["member_name"] = prof_rec["member_name"].fillna("").astype(str)
+    for c in prof_rec.columns: prof_rec[c] = prof_rec[c].fillna("").astype(str)
 
     if prof_users.empty:
         prof = prof_rec.copy()
         prof["member_district"] = ""
-        prof = prof[["uid", "member_district", "member_role", "member_name"]]
     else:
         prof = prof_users.merge(prof_rec, on="uid", how="outer", suffixes=("", "_rec"))
-        prof["member_role"] = prof["member_role"].fillna(prof.get("member_role_rec")).fillna("").astype(str)
-        prof["member_name"] = prof["member_name"].fillna(prof.get("member_name_rec")).fillna("").astype(str)
-        prof["member_district"] = prof["member_district"].fillna("").astype(str)
+        prof["member_role"] = prof["member_role"].fillna(prof.get("member_role_rec")).fillna("")
+        prof["member_name"] = prof["member_name"].fillna(prof.get("member_name_rec")).fillna("")
+        prof["member_district"] = prof["member_district"].fillna("")
         prof = prof.drop(columns=["member_role_rec", "member_name_rec"], errors="ignore")
-        prof = prof[["uid", "member_district", "member_role", "member_name"]]
+    prof = prof[["uid", "member_district", "member_role", "member_name"]]
 
-    # 월 기준 참여일수
-    dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
-    dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
-    cnts = dmonth[dmonth["completed_bool"]].groupby("uid", as_index=False)["day"].nunique().rename(columns={"day": "완료일수"})
-    merged = prof.merge(cnts, on="uid", how="left")
-    merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
-
-    # 주/월 교구별 참여(UID 기준)
-    dwk = df_all[(df_all["day"] >= wk_start.isoformat()) & (df_all["day"] <= wk_end.isoformat())].copy()
-    dwk["completed_bool"] = dwk["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
-    active_m_uids = set(dmonth[dmonth["completed_bool"]]["uid"].astype(str).tolist())
-    active_w_uids = set(dwk[dwk["completed_bool"]]["uid"].astype(str).tolist())
-
-    # uid -> 교구(=Diocese/Parish) 매핑
-    uid_to_dist = dict(zip(merged["uid"].astype(str).fillna(""), merged["member_district"].astype(str).fillna("")))
-
-    def _dist_of(_uid: str) -> str:
-        d = uid_to_dist.get(str(_uid), "")
-        return d if str(d).strip() else "(미입력)"
-
+    # --- 교구별 데이터 집계 (참여율 포함) ---
+    uid_to_dist = dict(zip(prof["uid"].astype(str), prof["member_district"].astype(str)))
     dist_uids = {}
     for _uid, _d in uid_to_dist.items():
-        d = _dist_of(_uid)
+        d = _d if _d.strip() else "(미입력)"
         dist_uids.setdefault(d, set()).add(_uid)
 
-    # --- [수정 시작] 교구별 데이터 집계 (참여율 추가) ---
+    dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
+    dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+    active_m_uids = set(dmonth[dmonth["completed_bool"]]["uid"].astype(str).tolist())
+
+    dwk = df_all[(df_all["day"] >= wk_start.isoformat()) & (df_all["day"] <= wk_end.isoformat())].copy()
+    dwk["completed_bool"] = dwk["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+    active_w_uids = set(dwk[dwk["completed_bool"]]["uid"].astype(str).tolist())
+
     parish_rows = []
     for d in sorted(dist_uids.keys()):
         uids = dist_uids[d]
         total_c = len(uids)
         monthly_c = len(uids & active_m_uids)
-        # 참여율 계산 (이번 달 참여 / 전체 UID)
+        weekly_c = len(uids & active_w_uids)
         rate = (monthly_c / total_c) if total_c > 0 else 0.0
         parish_rows.append({
             "Diocese": d,
             "전체 UID": total_c,
             "이번 달 참여": monthly_c,
-            "이번 주 참여": len(uids & active_w_uids),
-            "참여율": f"{rate:.1%}"  # 5번째 칸 추가
+            "이번 주 참여": weekly_c,
+            "참여율": f"{rate:.1%}"
         })
     df_parish = pd.DataFrame(parish_rows)
 
-    # --- [수정 시작] 6:4 비율 레이아웃 적용 ---
+    # --- [최종] 6:4 레이아웃 및 동적 레이블 반영 ---
     col_metrics, col_table = st.columns([6, 4])
 
-    # 왼쪽 6할: 주요 지표 (전체 UID 수, 이번 달 참여, 이번 주 참여)
     with col_metrics:
         m1, m2, m3 = st.columns(3)
         m1.metric("전체 UID 수", f"{t_all}명")
-        m2.metric("이번 달 참여", f"{a_m}명", f"{r_m:.0%}")
+        m2.metric(f"이번 달 참여({m}월)", f"{a_m}명", f"{r_m:.0%}")
         m3.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
 
-    # 오른쪽 4할: 교구별 참여 현황 표 (5개 컬럼)
     with col_table:
         st.markdown("**교구별 참여 현황**")
         if df_parish.empty:
@@ -1215,7 +1208,10 @@ def admin_dashboard():
                 use_container_width=True,
                 hide_index=True,
             )
-    # --- [수정 끝] ---
+    
+    # ------------------------------------------------------------
+    # 이후 "st.markdown("### 👥 성도 참여(월 기준)")" 코드가 이어지면 됩니다.
+
      
     st.markdown("### 👥 성도 참여(월 기준)")
     view_part = merged.rename(
