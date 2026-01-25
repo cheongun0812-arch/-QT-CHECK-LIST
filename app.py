@@ -1239,53 +1239,74 @@ def admin_dashboard():
         use_container_width=True,
     )
 
+    # --- [레이아웃 개선] 중보기도 요청(6) : QT 주소 저장(4) ---
     st.markdown("---")
-    st.markdown("### 🙏 중보기도 요청(Pray together in the Lord)")
+    footer_col1, footer_col2 = st.columns([6, 4])
 
-    dfp_all = cached_all_prayers_df()
-    if dfp_all.empty:
-        st.info("중보기도 요청이 아직 없습니다.")
-    else:
-        view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0)
+    with footer_col1:
+        st.markdown("### 🙏 중보기도 요청")
+        st.caption("Pray together in the Lord")
 
-        dfp = dfp_all.copy()
-        dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
+        dfp_all = cached_all_prayers_df()
+        if dfp_all.empty:
+            st.info("중보기도 요청이 아직 없습니다.")
+        else:
+            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_pray_view")
+            dfp = dfp_all.copy()
+            dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
+            dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
+            dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
+            dfp["_use_date"] = dfp["_linked_dt"].dt.date
+            dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
 
-        dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
-        dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
-        dfp["_use_date"] = dfp["_linked_dt"].dt.date
-        dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
+            # 현재 선택된 월 기준으로 필터링
+            dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+            if view_mode.startswith("공동체"):
+                dfp = dfp[dfp["is_public_bool"]]
+            dfp = dfp.sort_values(by=["_created_dt"], ascending=False)
 
-        dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+            view = dfp.rename(columns={
+                "saints_info": "성도 정보", "prayer_title": "기도 제목", "prayer_content": "기도 내용",
+                "is_public_bool": "공동체 중보", "linked_day": "연결 QT 날짜", "created_at": "작성 시각"
+            })
+            cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
+            st.dataframe(view[cols], use_container_width=True, hide_index=True)
 
-        if view_mode.startswith("공동체"):
-            dfp = dfp[dfp["is_public_bool"]]
+            csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
+            st.download_button("중보기도 CSV 다운로드(선택 월)", data=csv_p, file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
 
-        dfp = dfp.sort_values(by=["_created_dt"], ascending=False)
+    with footer_col2:
+        # 나의 QT 접속 주소 저장 패널
+        share_url = build_share_url(uid)
+        st.markdown(
+            f"""
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; border: 1px solid #dee2e6;">
+                <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 10px; color: #1c3d5a;">📌 나의 QT 주소 저장</div>
+                <div style="font-size: 0.9rem; line-height: 1.6; color: #495057; margin-bottom: 15px;">
+                    이 주소는 성도님만의 고유 주소입니다.<br>
+                    브라우저 즐겨찾기에 등록하거나 카카오톡 '나와의 채팅방'에 복사해두시면 매일 편리하게 접속하실 수 있습니다.
+                </div>
+                <div style="background: white; padding: 10px; border: 1px dashed #adb5bd; border-radius: 5px; word-break: break-all; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px;">
+                    {share_url}
+                </div>
+                <div style="text-align: center; font-size: 0.8rem; color: #6c757d;">
+                    ※ 이 주소를 분실하시면 기존 기록을 찾기 어려울 수 있으니 꼭 보관해 주세요.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-        view = dfp.rename(columns={
-            "saints_info": "성도 정보",
-            "prayer_title": "기도 제목",
-            "prayer_content": "기도 내용",
-            "is_public_bool": "공동체 중보",
-            "linked_day": "연결 QT 날짜",
-            "created_at": "작성 시각",
-        })
-
-        cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
-        st.dataframe(view[cols], use_container_width=True, hide_index=True)
-
-        csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
-        st.download_button("중보기도 CSV 다운로드(선택 월)", data=csv_p, file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
-
-    st.markdown("### ⬇️ 데이터 다운로드")
+    # 최하단 데이터 다운로드 버튼 (중앙 정렬 느낌을 위해 한 줄 차지)
+    st.markdown("---")
+    st.markdown("### ⬇️ 월간 원본 데이터 백업")
     csv = dmonth.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "월 데이터 CSV 다운로드",
+        "선택한 월 전체 데이터(CSV) 다운로드",
         data=csv,
         file_name=f"qti_records_{m_start.strftime('%Y%m')}.csv",
         mime="text/csv",
-        use_container_width=True,
+        use_container_width=True
     )
 
 
