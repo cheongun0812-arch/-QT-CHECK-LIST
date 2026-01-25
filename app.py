@@ -1438,66 +1438,103 @@ if "uid" not in st.query_params:
 
 uid = st.query_params["uid"]
 
-# [핵심] 성도 프로필 자동 불러오기 및 세션 유지 (관리자 모드 왕복 시 초기화 방지)
+# ---------------------------------------------------------
+# 보조 함수: 월 레이블에서 날짜 범위 추출 (에러 해결용)
+# ---------------------------------------------------------
+def _month_range_from_label(label: str) -> tuple[date, date]:
+    y, m = None, None
+    for yy, mm, lab in SUPPORTED_MONTHS:
+        if lab == label:
+            y, m = yy, mm
+            break
+    if y is None:
+        mm = re.findall(r"(\d{4})\D+(\d{1,2})", label or "")
+        if mm:
+            y, m = int(mm[0][0]), int(mm[0][1])
+        else:
+            y, m = today_kst().year, today_kst().month
+    start = date(y, m, 1)
+    if m == 12:
+        end = date(y + 1, 1, 1) - timedelta(days=1)
+    else:
+        end = date(y, m + 1, 1) - timedelta(days=1)
+    return start, end
+
+# ---------------------------------------------------------
+# 성도님 모드 (UID 및 세션 유지 로직)
+# ---------------------------------------------------------
+uid = st.query_params["uid"]
+
+# [핵심] 성도 프로필 로드 및 관리자 모드 왕복 시 유지 로직
 if st.session_state.get("profile_loaded_uid") != uid:
     dist0, role0, name0 = storage.get_profile(uid)
     
-    # 세션에 값이 이미 있더라도(입력 중이었더라도) DB에 저장된 값이 있다면 우선 로드
+    # DB에 저장된 값이 있다면 세션에 우선 적용
     if dist0: st.session_state["member_district"] = normalize_district(dist0)
     if role0: st.session_state["member_role"] = normalize_role(role0)
     if name0: st.session_state["member_name"] = str(name0)
     
-    # 기본값 설정 (DB에 데이터가 전혀 없는 신규 유저용)
+    # 신규 성도님을 위한 기본값 설정
     st.session_state.setdefault("member_district", DISTRICTS[0])
     st.session_state.setdefault("member_role", MEMBER_ROLES[0])
     st.session_state.setdefault("member_name", "")
     
     st.session_state["profile_loaded_uid"] = uid
 
-# 나머지 기본 상태 초기화
+# 날짜 및 월 선택 기본값 초기화
 if "picked_day" not in st.session_state:
     st.session_state["picked_day"] = today_kst()
 
-# --- (중략: _apply_overrides 등 유틸 함수 유지) ---
+if "month_label" not in st.session_state:
+    _cur = (today_kst().year, today_kst().month)
+    _default_label = f"{_cur[0]}년 {_cur[1]}월"
+    for y, m, lab in SUPPORTED_MONTHS:
+        if (y, m) == _cur:
+            _default_label = lab
+            break
+    st.session_state["month_label"] = _default_label
 
-# 1) 성도 정보(1회) + 이번 달 달성 (한 박스)
+# 1) 성도 정보(1회 입력) + 이번 달 달성 현황
 with st.container(border=True):
     st.subheader("🙋 성도 정보")
-    st.caption("정보를 수정하고 '저장'을 누르면 이후 모든 기록에 반영됩니다.")
+    st.caption("성도님의 정보는 한 번만 저장하면 이후 모든 기록에 자동으로 연결됩니다.")
 
     col_dist, col_r, col_n, col_s, col_a = st.columns([1, 1, 1, 1, 1])
 
     with col_dist:
-        st.selectbox("교구", DISTRICTS, key="member_district") # key를 직접 연결하여 세션 유지
+        st.selectbox("교구", DISTRICTS, key="member_district")
 
     with col_r:
-        st.selectbox("직분", MEMBER_ROLES, key="member_role") # key를 직접 연결하여 세션 유지
+        st.selectbox("직분", MEMBER_ROLES, key="member_role")
 
     with col_n:
-        st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동") # key를 직접 연결하여 세션 유지
+        st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
 
     with col_s:
         st.write("")
         st.write("")
         if st.button("💾 정보 저장", use_container_width=True):
-            dist_clean = normalize_district(st.session_state["member_district"])
-            role_clean = normalize_role(st.session_state["member_role"])
-            name_clean = clamp_20(st.session_state["member_name"])
-            if not name_clean:
+            dist_val = st.session_state["member_district"]
+            role_val = st.session_state["member_role"]
+            name_val = st.session_state["member_name"].strip()
+            
+            if not name_val:
                 st.warning("이름을 입력해 주세요.")
             else:
-                storage.upsert_profile(uid, dist_clean, role_clean, name_clean)
-                st.success("정보가 안전하게 저장되었습니다.")
+                storage.upsert_profile(uid, dist_val, role_val, name_val)
+                st.success("정보가 저장되었습니다!")
                 st.rerun()
 
     with col_a:
-        # 진행률 계산 로직 (기존 동일)
-        _m_label = st.session_state.get("month_label", SUPPORTED_MONTHS[0][2])
+        # 달성도 계산 (함수 정의 덕분에 이제 에러가 나지 않습니다)
+        _m_label = st.session_state.get("month_label")
         _m_start, _m_end = _month_range_from_label(_m_label)
+        
+        # storage에서 월 데이터를 로드하여 진행률 계산
         df_month = _apply_overrides(storage.load_month(uid, _m_start, _m_end))
         done_cnt = int(df_month["완료"].sum()) if not df_month.empty else 0
-        total_cnt = len(df_month)
-        progress = (done_cnt / total_cnt) if total_cnt else 0.0
+        total_cnt = len(df_month) if not df_month.empty else 1
+        progress = (done_cnt / total_cnt)
         
         st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.0%}")
         st.progress(progress)
