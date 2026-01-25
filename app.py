@@ -1177,6 +1177,7 @@ def admin_dashboard():
         d = _dist_of(_uid)
         dist_uids.setdefault(d, set()).add(_uid)
 
+    # --- [수정 시작] 교구별 데이터 집계 (참여율 추가) ---
     parish_rows = []
     for d in sorted(dist_uids.keys()):
         uids = dist_uids[d]
@@ -1193,7 +1194,7 @@ def admin_dashboard():
         })
     df_parish = pd.DataFrame(parish_rows)
 
-   # --- [수정 시작] 6:4 비율 레이아웃 적용 ---
+    # --- [수정 시작] 6:4 비율 레이아웃 적용 ---
     col_metrics, col_table = st.columns([6, 4])
 
     # 왼쪽 6할: 주요 지표 (전체 UID 수, 이번 달 참여, 이번 주 참여)
@@ -1214,6 +1215,8 @@ def admin_dashboard():
                 use_container_width=True,
                 hide_index=True,
             )
+    # --- [수정 끝] ---
+    
     k_month.metric("이번 달 참여", f"{a_m}명", f"{r_m:.0%}")
     k_week.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
 
