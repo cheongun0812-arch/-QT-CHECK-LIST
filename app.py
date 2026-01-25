@@ -1700,134 +1700,138 @@ with st.container(border=True):
         df_week = _apply_overrides(storage.load_month(uid, wk_start, wk_end))
         render_qt_table_html(df_week)
 
-# 4) Pray together (중보기도 요청) - 기본 숨김 + 비콘(등대) + 우측 '열기/닫기'
-with st.container(border=True):
-    # 패널 상태(기본 닫힘)
-    if "pray_panel_open" not in st.session_state or not isinstance(st.session_state.get("pray_panel_open"), bool):
-        st.session_state["pray_panel_open"] = False
+# --- [하단 레이아웃 개선] 중보기도(6) : 주소저장(4) ---
+st.markdown("---")
+footer_col1, footer_col2 = st.columns([6, 4], gap="large")
 
-    def _toggle_pray_panel():
-        st.session_state["pray_panel_open"] = not st.session_state.get("pray_panel_open", False)
-        st.session_state["pray_err"] = ""
+with footer_col1:
+    # 4) Pray together (중보기도 요청) - 기본 숨김 + 비콘(등대) + 우측 '열기/닫기'
+    with st.container(border=True):
+        # 패널 상태(기본 닫힘)
+        if "pray_panel_open" not in st.session_state or not isinstance(st.session_state.get("pray_panel_open"), bool):
+            st.session_state["pray_panel_open"] = False
 
-    # 제목(항상 노출) + 비콘(항상 점멸) + 우측 버튼
-    left, right = st.columns([6, 1])
-    with left:
-        st.markdown(
-            '''
-            <div class="prayer-title-row">
-              <div class="prayer-title">
-                <span class="prayer-icon-wrap">🙏<span class="prayer-beacon"></span></span>
-                <span>Pray together in the Lord (중보기도 요청)</span>
-              </div>
-            </div>
-            ''',
-            unsafe_allow_html=True,
-        )
+        def _toggle_pray_panel():
+            st.session_state["pray_panel_open"] = not st.session_state.get("pray_panel_open", False)
+            st.session_state["pray_err"] = ""
 
-    with right:
-        btn_label = "열기" if not st.session_state.get("pray_panel_open", False) else "닫기"
-        st.button(btn_label, key="pray_toggle_btn", use_container_width=True, on_click=_toggle_pray_panel)
-
-    # 내용은 기본 숨김. expander의 슬라이딩 애니메이션을 사용하고, 헤더는 CSS로 숨깁니다.
-    with st.expander(" ", expanded=st.session_state.get("pray_panel_open", False)):
-        st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
-
-        st.session_state.setdefault("pray_title", "")
-        st.session_state.setdefault("pray_content", "")
-        st.session_state.setdefault("pray_is_public", False)
-        st.session_state.setdefault("pray_err", "")
-        st.session_state.setdefault("pray_ok", False)
-        st.session_state.setdefault("pray_last_info", "")
-        st.session_state.setdefault("pray_last_title", "")
-
-        st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 나의 건강 회복을 위해, 가족의 구원을 위해...등", key="pray_title")
-        st.text_area(
-            "기도 내용(선택, 500자 이내)",
-            height=120,
-            max_chars=500,
-            placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
-            key="pray_content",
-        )
-
-        tcol2, ccol2 = st.columns([3, 1])
-        with tcol2:
-            st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
-        with ccol2:
-            st.checkbox("중보기도 요청", key="pray_is_public")  # 기본: 미체크(False)
-
-        def _submit_prayer():
-            district_to_save = normalize_district(st.session_state.get("member_district", DISTRICTS[0]))
-            role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
-            name_to_save = clamp_20(st.session_state.get("member_name", ""))
-
-            ptv = (st.session_state.get("pray_title") or "").strip()
-            pcv = (st.session_state.get("pray_content") or "").strip()
-            pubv = bool(st.session_state.get("pray_is_public", False))
-
-            if not name_to_save:
-                st.session_state["pray_err"] = "먼저 '성도 정보(교구/직분/이름)'를 저장해 주세요."
-                st.session_state["pray_ok"] = False
-                return
-            if not ptv:
-                st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
-                st.session_state["pray_ok"] = False
-                return
-
-            linked = st.session_state.get("picked_day", today_kst()).isoformat()
-            storage.insert_prayer_request(
-                uid=str(uid),
-                member_district=district_to_save,
-                member_role=role_to_save,
-                member_name=name_to_save,
-                prayer_title=ptv,
-                prayer_content=pcv,
-                is_public=pubv,
-                linked_day=linked,
+        # 제목(항상 노출) + 비콘(항상 점멸) + 우측 버튼
+        left, right = st.columns([6, 1])
+        with left:
+            st.markdown(
+                '''
+                <div class="prayer-title-row">
+                  <div class="prayer-title">
+                    <span class="prayer-icon-wrap">🙏<span class="prayer-beacon"></span></span>
+                    <span>Pray together in the Lord (중보기도 요청)</span>
+                  </div>
+                </div>
+                ''',
+                unsafe_allow_html=True,
             )
 
-            who = (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
-            st.session_state["pray_last_info"] = f"{district_to_save}/{who}".strip("/")
-            st.session_state["pray_last_title"] = ptv
+        with right:
+            btn_label = "열기" if not st.session_state.get("pray_panel_open", False) else "닫기"
+            st.button(btn_label, key="pray_toggle_btn", use_container_width=True, on_click=_toggle_pray_panel)
 
-            # 입력 초기화(콜백 안에서만)
-            st.session_state["pray_title"] = ""
-            st.session_state["pray_content"] = ""
-            st.session_state["pray_is_public"] = False
-            st.session_state["pray_err"] = ""
-            st.session_state["pray_ok"] = True
+        # 내용은 기본 숨김. expander의 슬라이딩 애니메이션을 사용하고, 헤더는 CSS로 숨깁니다.
+        with st.expander(" ", expanded=st.session_state.get("pray_panel_open", False)):
+            st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
 
-        st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
+            st.session_state.setdefault("pray_title", "")
+            st.session_state.setdefault("pray_content", "")
+            st.session_state.setdefault("pray_is_public", False)
+            st.session_state.setdefault("pray_err", "")
+            st.session_state.setdefault("pray_ok", False)
+            st.session_state.setdefault("pray_last_info", "")
+            st.session_state.setdefault("pray_last_title", "")
 
-        if st.session_state.get("pray_err"):
-            st.warning(st.session_state["pray_err"])
-        elif st.session_state.get("pray_ok"):
-            info = st.session_state.get("pray_last_info") or ""
-            title = st.session_state.get("pray_last_title") or ""
-            if info and title:
-                st.success(f"({info}) '{title}' 중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
-            else:
-                st.success("중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
+            st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 나의 건강 회복을 위해, 가족의 구원을 위해...등", key="pray_title")
+            st.text_area(
+                "기도 내용(선택, 500자 이내)",
+                height=120,
+                max_chars=500,
+                placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
+                key="pray_content",
+            )
 
-st.markdown("---")
-# 내 QT 접속 주소(중요) - 화면 최하단
-share_url = build_share_url(uid)
-st.markdown(
-    """
-    <div id="sharePanel">
-      <div id="shareHeader">
-        <div id="shareTitle">📌 나의 QT 주소(UID) 저장</div>
-        <button id="shareToggleBtn" type="button">▴</button>
-      </div>
-      <div id="shareContent">
-        <div style="font-weight:800; margin-bottom:8px;">
-          이 주소를 꼭 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 하세요!
-        </div>
-    """,
-    unsafe_allow_html=True,
-)
-st.code(share_url)
-if "<YOUR-APP>" in share_url:
-    st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
-st.markdown("</div></div>", unsafe_allow_html=True)
-inject_share_panel_js()
+            tcol2, ccol2 = st.columns([3, 1])
+            with tcol2:
+                st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
+            with ccol2:
+                st.checkbox("중보기도 요청", key="pray_is_public")  # 기본: 미체크(False)
+
+            def _submit_prayer():
+                district_to_save = normalize_district(st.session_state.get("member_district", DISTRICTS[0]))
+                role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+                name_to_save = clamp_20(st.session_state.get("member_name", ""))
+
+                ptv = (st.session_state.get("pray_title") or "").strip()
+                pcv = (st.session_state.get("pray_content") or "").strip()
+                pubv = bool(st.session_state.get("pray_is_public", False))
+
+                if not name_to_save:
+                    st.session_state["pray_err"] = "먼저 '성도 정보(교구/직분/이름)'를 저장해 주세요."
+                    st.session_state["pray_ok"] = False
+                    return
+                if not ptv:
+                    st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
+                    st.session_state["pray_ok"] = False
+                    return
+
+                linked = st.session_state.get("picked_day", today_kst()).isoformat()
+                storage.insert_prayer_request(
+                    uid=str(uid),
+                    member_district=district_to_save,
+                    member_role=role_to_save,
+                    member_name=name_to_save,
+                    prayer_title=ptv,
+                    prayer_content=pcv,
+                    is_public=pubv,
+                    linked_day=linked,
+                )
+
+                who = (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
+                st.session_state["pray_last_info"] = f"{district_to_save}/{who}".strip("/")
+                st.session_state["pray_last_title"] = ptv
+
+                # 입력 초기화(콜백 안에서만)
+                st.session_state["pray_title"] = ""
+                st.session_state["pray_content"] = ""
+                st.session_state["pray_is_public"] = False
+                st.session_state["pray_err"] = ""
+                st.session_state["pray_ok"] = True
+
+            st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
+
+            if st.session_state.get("pray_err"):
+                st.warning(st.session_state["pray_err"])
+            elif st.session_state.get("pray_ok"):
+                info = st.session_state.get("pray_last_info") or ""
+                title = st.session_state.get("pray_last_title") or ""
+                if info and title:
+                    st.success(f"({info}) '{title}' 중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
+                else:
+                    st.success("중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
+
+with footer_col2:
+    share_url = build_share_url(uid)
+    st.markdown(
+        """
+        <div id="sharePanel">
+          <div id="shareHeader">
+            <div id="shareTitle">📌 나의 QT 주소(UID) 저장</div>
+            <button id="shareToggleBtn" type="button">▴</button>
+          </div>
+          <div id="shareContent">
+            <div style="font-weight:800; margin-bottom:8px;">
+              이 주소를 꼭 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 하세요!
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.code(share_url)
+    if "<YOUR-APP>" in share_url:
+        st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
+    st.markdown("</div></div>", unsafe_allow_html=True)
+    inject_share_panel_js()
