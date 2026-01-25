@@ -1216,10 +1216,7 @@ def admin_dashboard():
                 hide_index=True,
             )
     # --- [수정 끝] ---
-    
-    k_month.metric("이번 달 참여", f"{a_m}명", f"{r_m:.0%}")
-    k_week.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
-
+     
     st.markdown("### 👥 성도 참여(월 기준)")
     view_part = merged.rename(
         columns={
