@@ -1239,10 +1239,13 @@ def admin_dashboard():
         use_container_width=True,
     )
 
-   # --- [오류 해결 및 레이아웃 유지] 중보기도(6) : 관리자 안내(4) ---
+    # --- [하단 레이아웃 개선] 중보기도(6) : 주소저장(4) ---
     st.markdown("---")
+    
+    # 하나의 행을 6:4 비율로 생성
     footer_col1, footer_col2 = st.columns([6, 4])
 
+    # 왼쪽 6할: 중보기도 요청 목록
     with footer_col1:
         st.markdown("### 🙏 중보기도 요청")
         st.caption("Pray together in the Lord")
@@ -1251,8 +1254,8 @@ def admin_dashboard():
         if dfp_all.empty:
             st.info("중보기도 요청이 아직 없습니다.")
         else:
-            # 관리자용 위젯에 고유 key를 부여하여 충돌 방지
-            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_footer_pray_view_v3")
+            # 관리자용 보기 옵션 선택
+            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_pray_view_final")
             
             dfp = dfp_all.copy()
             dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
@@ -1261,12 +1264,15 @@ def admin_dashboard():
             dfp["_use_date"] = dfp["_linked_dt"].dt.date
             dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
 
-            # 선택된 월 기준 필터링
+            # 선택된 월 기준 필터링 (m_start, m_end 사용)
             dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+            
             if view_mode.startswith("공동체"):
                 dfp = dfp[dfp["is_public_bool"]]
+            
             dfp = dfp.sort_values(by=["_created_dt"], ascending=False)
 
+            # 표 구성
             view = dfp.rename(columns={
                 "saints_info": "성도 정보", "prayer_title": "기도 제목", "prayer_content": "기도 내용",
                 "is_public_bool": "공동체 중보", "linked_day": "연결 QT 날짜", "created_at": "작성 시각"
@@ -1274,31 +1280,39 @@ def admin_dashboard():
             cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
             st.dataframe(view[cols], use_container_width=True, hide_index=True)
 
+            # 다운로드 버튼
             csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
             st.download_button("중보기도 CSV 다운로드", data=csv_p, file_name=f"prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
 
+    # 오른쪽 4할: 나의 QT 주소 저장 패널
     with footer_col2:
-        # ⚠️ NameError 해결: uid 변수 참조를 제거하고 관리자 안내로 교체
+        # 주소 빌드
+        share_url = build_share_url(uid)
+        
+        # 시각적으로 정렬을 맞추기 위해 상단 여백을 조금 줍니다.
         st.write("") 
         st.write("")
         st.markdown(
             f"""
-            <div style="background-color: #f8f9fa; padding: 25px; border-radius: 12px; border: 1px solid #e9ecef;">
-                <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 12px; color: #2c3e50; border-left: 4px solid #e67e22; padding-left: 10px;">
-                    📢 관리자 대시보드 안내
+            <div style="background-color: #f8f9fa; padding: 25px; border-radius: 12px; border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <div style="font-weight: 800; font-size: 1.15rem; margin-bottom: 12px; color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px;">
+                    📌 나의 QT 주소 저장
                 </div>
-                <p style="font-size: 0.85rem; color: #6c757d; line-height: 1.6;">
-                    이 화면은 <b>교회 전체 통계</b>를 확인하는 관리자 전용 페이지입니다.<br><br>
-                    성도님 개인이 사용하는 '나의 QT 주소' 확인이나 큐티 기록 입력은 <b>'성도님 모드'</b>로 전환하여 확인해 주세요.
+                <p style="font-size: 0.9rem; color: #6c757d; line-height: 1.5; margin-bottom: 20px;">
+                    성도님만의 고유 접속 주소입니다. 브라우저 즐겨찾기나 '나와의 채팅방'에 보관해 주세요.
                 </p>
-                <div style="text-align: center; font-size: 0.8rem; color: #e67e22; font-weight: 600; margin-top: 15px; border-top: 1px solid #eee; padding-top: 10px;">
-                    ※ 관리자 로그아웃 후 개인 주소로 접속하세요.
+                <div style="background: #ffffff; padding: 12px; border: 1px dashed #3498db; border-radius: 6px; word-break: break-all; font-family: 'Courier New', monospace; font-size: 0.85rem; color: #2980b9; margin-bottom: 15px;">
+                    {share_url}
+                </div>
+                <div style="text-align: center; font-size: 0.8rem; color: #e74c3c; font-weight: 600;">
+                    ※ 주소를 잊으시면 기존 기록 확인이 어렵습니다.
                 </div>
             </div>
             """,
             unsafe_allow_html=True
         )
 
+    # 최하단 원본 데이터 다운로드 (전체 너비 사용)
     st.markdown("---")
     st.markdown("### ⬇️ 월간 원본 데이터 백업")
     csv_raw = dmonth.to_csv(index=False).encode("utf-8-sig")
@@ -1424,7 +1438,7 @@ if mode == "관리자(대시보드)":
     st.stop()
 
 # -------------------------
-# 성도님 모드 (관리자 모드 전환 시 정보 유지 로직 포함)
+# 성도님 모드
 # -------------------------
 
 # UID 관리
@@ -1438,9 +1452,55 @@ if "uid" not in st.query_params:
 
 uid = st.query_params["uid"]
 
-# ---------------------------------------------------------
-# 보조 함수: 월 레이블에서 날짜 범위 추출 (에러 해결용)
-# ---------------------------------------------------------
+# 기본 상태 초기화
+if "picked_day" not in st.session_state:
+    st.session_state["picked_day"] = today_kst()
+
+if "month_label" not in st.session_state:
+    _cur = (today_kst().year, today_kst().month)
+    _labels = [m[2] for m in SUPPORTED_MONTHS]
+    _default_label = None
+    for y, m, lab in SUPPORTED_MONTHS:
+        if (y, m) == _cur:
+            _default_label = lab
+            break
+    st.session_state["month_label"] = _default_label or (_labels[0] if _labels else f"{_cur[0]}년 {_cur[1]}월")
+
+# 즉시 반영(리얼타임 보상감)용 로컬 오버라이드
+st.session_state.setdefault("local_qt_overrides", {})
+
+def _set_local(day_iso: str, **kwargs):
+    d = st.session_state["local_qt_overrides"].get(day_iso, {})
+    for k, v in kwargs.items():
+        if v is None:
+            continue
+        d[k] = v
+    st.session_state["local_qt_overrides"][day_iso] = d
+
+def _apply_overrides(df_in: pd.DataFrame) -> pd.DataFrame:
+    if df_in is None or df_in.empty:
+        return df_in
+    ov = st.session_state.get("local_qt_overrides", {})
+    if not ov:
+        return df_in
+    df2 = df_in.copy()
+    if "날짜" not in df2.columns:
+        return df2
+    for i, row in df2.iterrows():
+        ds = str(row.get("날짜", ""))
+        if ds in ov:
+            x = ov[ds]
+            if "start_time" in x and "QT 시작" in df2.columns:
+                df2.at[i, "QT 시작"] = (x.get("start_time") or df2.at[i, "QT 시작"])
+            if "end_time" in x and "QT 종료" in df2.columns:
+                df2.at[i, "QT 종료"] = (x.get("end_time") or df2.at[i, "QT 종료"])
+            if "completed" in x and "완료" in df2.columns:
+                df2.at[i, "완료"] = bool(x.get("completed"))
+            if "prayer_note" in x and "나의 묵상 기도" in df2.columns:
+                if (x.get("prayer_note") or "").strip():
+                    df2.at[i, "나의 묵상 기도"] = x.get("prayer_note")
+    return df2
+
 def _month_range_from_label(label: str) -> tuple[date, date]:
     y, m = None, None
     for yy, mm, lab in SUPPORTED_MONTHS:
@@ -1460,52 +1520,50 @@ def _month_range_from_label(label: str) -> tuple[date, date]:
         end = date(y, m + 1, 1) - timedelta(days=1)
     return start, end
 
-# ---------------------------------------------------------
-# 성도님 모드 (UID 및 세션 유지 로직)
-# ---------------------------------------------------------
-uid = st.query_params["uid"]
-
-# [핵심] 성도 프로필 로드 및 관리자 모드 왕복 시 유지 로직
+# 성도 프로필 자동 불러오기(최초 1회)
 if st.session_state.get("profile_loaded_uid") != uid:
     dist0, role0, name0 = storage.get_profile(uid)
-    
-    # DB에 저장된 값이 있다면 세션에 우선 적용
-    if dist0: st.session_state["member_district"] = normalize_district(dist0)
-    if role0: st.session_state["member_role"] = normalize_role(role0)
-    if name0: st.session_state["member_name"] = str(name0)
-    
-    # 신규 성도님을 위한 기본값 설정
+
+    # 기본값(세션에 값이 없을 때만 세팅)
     st.session_state.setdefault("member_district", DISTRICTS[0])
     st.session_state.setdefault("member_role", MEMBER_ROLES[0])
     st.session_state.setdefault("member_name", "")
-    
+
+    # 저장된 값이 있을 때만 덮어쓰기(관리자 모드 왕복 시 현재 입력값 유지)
+    if dist0:
+        st.session_state["member_district"] = normalize_district(dist0)
+    if role0:
+        st.session_state["member_role"] = normalize_role(role0)
+    if name0:
+        st.session_state["member_name"] = str(name0)
+
     st.session_state["profile_loaded_uid"] = uid
+    st.session_state["profile_loaded"] = True
 
-# 날짜 및 월 선택 기본값 초기화
-if "picked_day" not in st.session_state:
-    st.session_state["picked_day"] = today_kst()
+# ✅ 이 달 달성도(표시용) 계산 - 선택된 월 기준
+_m_label = st.session_state.get("month_label")
+_m_start, _m_end = _month_range_from_label(_m_label)
+df_month = _apply_overrides(storage.load_month(uid, _m_start, _m_end))
+done_cnt = int(df_month["완료"].sum()) if (df_month is not None and not df_month.empty and "완료" in df_month.columns) else 0
+total_cnt = int(len(df_month)) if df_month is not None else 0
+progress = (done_cnt / total_cnt) if total_cnt else 0.0
 
-if "month_label" not in st.session_state:
-    _cur = (today_kst().year, today_kst().month)
-    _default_label = f"{_cur[0]}년 {_cur[1]}월"
-    for y, m, lab in SUPPORTED_MONTHS:
-        if (y, m) == _cur:
-            _default_label = lab
-            break
-    st.session_state["month_label"] = _default_label
-
-# 1) 성도 정보(1회 입력) + 이번 달 달성 현황
+# 1) 성도 정보(1회) + 이번 달 달성 (한 박스)
 with st.container(border=True):
-    st.subheader("🙋 성도 정보")
-    st.caption("성도님의 정보는 한 번만 저장하면 이후 모든 기록에 자동으로 연결됩니다.")
+    st.subheader("🙋 성도 정보(1회 입력)")
+    st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/교구/직분/이름이 함께 저장됩니다.")
 
     col_dist, col_r, col_n, col_s, col_a = st.columns([1, 1, 1, 1, 1])
 
     with col_dist:
-        st.selectbox("교구", DISTRICTS, key="member_district")
+        cur_dist = st.session_state.get("member_district", DISTRICTS[0])
+        didx = DISTRICTS.index(cur_dist) if cur_dist in DISTRICTS else 0
+        st.selectbox("교구", DISTRICTS, index=didx, key="member_district")
 
     with col_r:
-        st.selectbox("직분", MEMBER_ROLES, key="member_role")
+        cur_role = st.session_state.get("member_role", MEMBER_ROLES[0])
+        ridx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
+        st.selectbox("직분", MEMBER_ROLES, index=ridx, key="member_role")
 
     with col_n:
         st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
@@ -1513,32 +1571,26 @@ with st.container(border=True):
     with col_s:
         st.write("")
         st.write("")
-        if st.button("💾 정보 저장", use_container_width=True):
-            dist_val = st.session_state["member_district"]
-            role_val = st.session_state["member_role"]
-            name_val = st.session_state["member_name"].strip()
-            
-            if not name_val:
+        if st.button("💾 성도 정보 저장", use_container_width=True):
+            dist_clean = normalize_district(st.session_state.get("member_district", DISTRICTS[0]))
+            role_clean = normalize_role(st.session_state.get("member_role", ""))
+            name_clean = clamp_20(st.session_state.get("member_name", ""))
+            if not name_clean:
                 st.warning("이름을 입력해 주세요.")
             else:
-                storage.upsert_profile(uid, dist_val, role_val, name_val)
-                st.success("정보가 저장되었습니다!")
+                storage.upsert_profile(uid, dist_clean, role_clean, name_clean)
+                st.success("저장되었습니다! 다음 접속부터 자동으로 불러옵니다.")
                 st.rerun()
 
     with col_a:
-        # 달성도 계산 (함수 정의 덕분에 이제 에러가 나지 않습니다)
-        _m_label = st.session_state.get("month_label")
-        _m_start, _m_end = _month_range_from_label(_m_label)
-        
-        # storage에서 월 데이터를 로드하여 진행률 계산
-        df_month = _apply_overrides(storage.load_month(uid, _m_start, _m_end))
-        done_cnt = int(df_month["완료"].sum()) if not df_month.empty else 0
-        total_cnt = len(df_month) if not df_month.empty else 1
-        progress = (done_cnt / total_cnt)
-        
         st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.0%}")
         st.progress(progress)
-        
+
+    _d = normalize_district(st.session_state.get("member_district", ""))
+    _r = normalize_role(st.session_state.get("member_role", ""))
+    _n = clamp_20(st.session_state.get("member_name", "")) or "-"
+    st.info(f"현재 저장 값: {_d}/{_r} {_n}".strip())
+
 # ---------------------------------------------------------
 # 2) 큐티 기록 및 묵상 기도 (4:6 비율 레이아웃 적용)
 # ---------------------------------------------------------
