@@ -1567,80 +1567,87 @@ with st.container(border=True):
     _n = clamp_20(st.session_state.get("member_name", "")) or "-"
     st.info(f"현재 저장 값: {_d}/{_r} {_n}".strip())
 
-# 2) 오늘의 큐티 기록 (월 선택/날짜 선택 좌·우)
+# ---------------------------------------------------------
+# 2) 큐티 기록 및 묵상 기도 (4:6 비율 레이아웃 적용)
+# ---------------------------------------------------------
 with st.container(border=True):
-    st.subheader("✍️ 오늘의 큐티 기록")
+    # 4:6 비율로 컬럼 나누기
+    col_left, col_right = st.columns([4, 6])
 
-    col_m, col_d = st.columns([1, 1])
-    with col_m:
+    # --- 왼쪽 컬럼: 오늘의 큐티 기록 (4) ---
+    with col_left:
+        st.subheader("✍️ 오늘의 큐티 기록")
+        
+        # 날짜 선택을 세로로 배치하여 공간 확보
         st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS], key="month_label")
-    with col_d:
         picked_day = st.date_input("날짜 선택", value=st.session_state["picked_day"], key="picked_day")
+        day_str = picked_day.isoformat()
 
-    day_str = picked_day.isoformat()
+        role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+        name_to_save = clamp_20(st.session_state.get("member_name", ""))
 
-    role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
-    name_to_save = clamp_20(st.session_state.get("member_name", ""))
+        # 데이터 로드
+        df_day = _apply_overrides(storage.load_month(uid, picked_day, picked_day))
+        day_row = df_day.iloc[0].to_dict() if (df_day is not None and not df_day.empty) else {}
+        cur_start = day_row.get("QT 시작", "") or ""
+        cur_end = day_row.get("QT 종료", "") or ""
+        cur_done = bool(day_row.get("완료", False))
+        cur_note = str(day_row.get("나의 묵상 기도", "") or "")
 
-    df_day = _apply_overrides(storage.load_month(uid, picked_day, picked_day))
-    day_row = df_day.iloc[0].to_dict() if (df_day is not None and not df_day.empty) else {}
-    cur_start = day_row.get("QT 시작", "") or ""
-    cur_end = day_row.get("QT 종료", "") or ""
-    cur_done = bool(day_row.get("완료", False))
-    cur_note = str(day_row.get("나의 묵상 기도", "") or "")
+        # 기록 버튼 (아이콘과 명칭 간소화)
+        c1, c2, c3 = st.columns(3)
+        if c1.button("▶ 시작", use_container_width=True, help="현재 시간으로 시작 기록"):
+            t = now_hhmm_kst()
+            storage.upsert_one(uid, day_str, start_time=t, member_role=role_to_save, member_name=name_to_save)
+            _set_local(day_str, start_time=t)
+            st.rerun()
 
-    c1, c2, c3 = st.columns(3)
-    if c1.button("▶ 시작(현재시간)", use_container_width=True):
-        t = now_hhmm_kst()
-        storage.upsert_one(uid, day_str, start_time=t, member_role=role_to_save, member_name=name_to_save)
-        _set_local(day_str, start_time=t)
-        st.rerun()
+        if c2.button("■ 종료", use_container_width=True, help="현재 시간으로 종료 기록"):
+            t = now_hhmm_kst()
+            storage.upsert_one(uid, day_str, end_time=t, member_role=role_to_save, member_name=name_to_save)
+            _set_local(day_str, end_time=t)
+            st.rerun()
 
-    if c2.button("■ 종료(현재시간)", use_container_width=True):
-        t = now_hhmm_kst()
-        storage.upsert_one(uid, day_str, end_time=t, member_role=role_to_save, member_name=name_to_save)
-        _set_local(day_str, end_time=t)
-        st.rerun()
+        if c3.button("✅ " + ("취소" if cur_done else "완료"), use_container_width=True):
+            storage.upsert_one(uid, day_str, completed=not cur_done, member_role=role_to_save, member_name=name_to_save)
+            _set_local(day_str, completed=not cur_done)
+            st.rerun()
 
-    if c3.button("✅ " + ("취소" if cur_done else "완료"), use_container_width=True):
-        storage.upsert_one(uid, day_str, completed=not cur_done, member_role=role_to_save, member_name=name_to_save)
-        _set_local(day_str, completed=not cur_done)
-        st.rerun()
+        st.markdown("#### 🙌 실시간 확인")
+        v1, v2, v3 = st.columns(3)
+        with v1: st.metric("시작", cur_start or "—")
+        with v2: st.metric("종료", cur_end or "—")
+        with v3: st.metric("완료", "✅" if cur_done else "—")
 
-    st.markdown("#### 🙌 기록 확인")
-    v1, v2, v3 = st.columns(3)
-    with v1:
-        st.metric("QT 시작", cur_start or "—")
-    with v2:
-        st.metric("QT 종료", cur_end or "—")
-    with v3:
-        st.metric("완료", "✅" if cur_done else "—")
+    # --- 오른쪽 컬럼: 나의 묵상 기도 (6) ---
+    with col_right:
+        st.subheader("🕊️ 나의 묵상 기도")
+        
+        # 날짜가 바뀔 때만 입력창 동기화 (기존 50자 제한 버그 수정)
+        if st.session_state.get("_note_day") != day_str:
+            st.session_state["_note_day"] = day_str
+            st.session_state["prayer_note_input"] = cur_note[:150]
 
-    st.markdown("### 🕊️ 나의 묵상 기도 (150자 이내)")
-    if st.session_state.get("_note_day") != day_str:
-        st.session_state["_note_day"] = day_str
-        st.session_state["prayer_note_input"] = cur_note[:50]
-
-    memo = st.text_area(
-        "경건의 시간 하나님 앞에 서 있는 내 모습을 생각하며 한 줄 묵상 기도를 적어 보세요.",
-        height=90,
-        max_chars=150,
-        placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
-        key="prayer_note_input",
-    )
-
-    if st.button("묵상 기도 저장", use_container_width=True, type="primary"):
-        memo_clean = clamp_50(memo or "")
-        storage.upsert_one(
-            uid, day_str,
-            signature="",
-            prayer_note=memo_clean,
-            member_role=role_to_save,
-            member_name=name_to_save,
+        memo = st.text_area(
+            "하나님 앞에 서 있는 내 모습을 생각하며 한 줄 기도를 적어 보세요.",
+            height=215,  # 왼쪽 섹션의 높이와 시각적 밸런스를 맞춤
+            max_chars=150,
+            placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
+            key="prayer_note_input",
         )
-        _set_local(day_str, prayer_note=memo_clean)
-        st.success("저장되었습니다.")
-        st.rerun()
+
+        if st.button("💾 묵상 기도 저장", use_container_width=True, type="primary"):
+            memo_clean = clamp_300(memo or "")  # 내부 저장용은 300자까지 허용하여 안전성 확보
+            storage.upsert_one(
+                uid, day_str,
+                signature="",
+                prayer_note=memo_clean,
+                member_role=role_to_save,
+                member_name=name_to_save,
+            )
+            _set_local(day_str, prayer_note=memo_clean)
+            st.success("기도가 저장되었습니다.")
+            st.rerun()
 
 # 3) 기록 확인(주간) - '묵상 기도 저장' 바로 아래
 with st.container(border=True):
