@@ -1124,14 +1124,13 @@ def admin_dashboard():
     wk_start = week_start_monday(anchor)
     wk_end = wk_start + timedelta(days=6)
 
-    # 1. 월 참여(누적): 해당 월 전체 기간 기준
+    # 참여 데이터 계산 (월: 누적, 주: 순수 해당 주간)
     a_m, _, r_m = compute_participation(df_all, m_start, m_end)
-    # 2. 주 참여(순수): 해당 주간 7일 기간 기준
     a_wk, t_all, r_wk = compute_participation(df_all, wk_start, wk_end)
 
     st.markdown("### ✅ 참여 현황")
 
-    # --- 성도 프로필 매핑 로직 ---
+    # --- 프로필 및 데이터 통합 로직 ---
     df_users = cached_all_users_df()
     prof_users = pd.DataFrame(columns=["uid", "member_district", "member_role", "member_name"])
     if not df_users.empty:
@@ -1139,13 +1138,11 @@ def admin_dashboard():
         u["_t"] = pd.to_datetime(u.get("updated_at"), errors="coerce")
         u = u.sort_values(["uid", "_t"])
         prof_users = u.groupby("uid", as_index=False).tail(1)[["uid", "member_district", "member_role", "member_name"]].copy()
-        for c in prof_users.columns: prof_users[c] = prof_users[c].fillna("").astype(str)
 
     latest = df_all.copy()
     latest["_t"] = pd.to_datetime(latest["updated_at"], errors="coerce")
     latest = latest.sort_values(["uid", "_t"])
     prof_rec = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
-    for c in prof_rec.columns: prof_rec[c] = prof_rec[c].fillna("").astype(str)
 
     if prof_users.empty:
         prof = prof_rec.copy()
@@ -1156,21 +1153,28 @@ def admin_dashboard():
         prof["member_name"] = prof["member_name"].fillna(prof.get("member_name_rec")).fillna("")
         prof["member_district"] = prof["member_district"].fillna("")
         prof = prof.drop(columns=["member_role_rec", "member_name_rec"], errors="ignore")
-    prof = prof[["uid", "member_district", "member_role", "member_name"]]
+    
+    prof["uid"] = prof["uid"].astype(str)
 
-    # --- 교구별 데이터 집계 (참여율 포함) ---
-    uid_to_dist = dict(zip(prof["uid"].astype(str), prof["member_district"].astype(str)))
-    dist_uids = {}
-    for _uid, _d in uid_to_dist.items():
-        d = _d if _d.strip() else "(미입력)"
-        dist_uids.setdefault(d, set()).add(_uid)
-
+    # 월 기준 참여일수 집계
     dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
     dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
-    active_m_uids = set(dmonth[dmonth["completed_bool"]]["uid"].astype(str).tolist())
+    cnts = dmonth[dmonth["completed_bool"]].groupby("uid", as_index=False)["day"].nunique().rename(columns={"day": "완료일수"})
+    
+    # 성도 참여 리스트 생성을 위한 데이터 병합
+    merged = prof.merge(cnts, on="uid", how="left")
+    merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
+
+    # 교구별 참여 현황 계산 (UID 기준)
+    uid_to_dist = dict(zip(merged["uid"], merged["member_district"]))
+    dist_uids = {}
+    for _uid, _d in uid_to_dist.items():
+        d = _d if str(_d).strip() else "(미입력)"
+        dist_uids.setdefault(d, set()).add(str(_uid))
 
     dwk = df_all[(df_all["day"] >= wk_start.isoformat()) & (df_all["day"] <= wk_end.isoformat())].copy()
     dwk["completed_bool"] = dwk["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+    active_m_uids = set(dmonth[dmonth["completed_bool"]]["uid"].astype(str).tolist())
     active_w_uids = set(dwk[dwk["completed_bool"]]["uid"].astype(str).tolist())
 
     parish_rows = []
@@ -1195,6 +1199,7 @@ def admin_dashboard():
     with col_metrics:
         m1, m2, m3 = st.columns(3)
         m1.metric("전체 UID 수", f"{t_all}명")
+        # 선택된 월(m)에 따라 레이블 동적 변경
         m2.metric(f"이번 달 참여({m}월)", f"{a_m}명", f"{r_m:.0%}")
         m3.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
 
@@ -1208,11 +1213,7 @@ def admin_dashboard():
                 use_container_width=True,
                 hide_index=True,
             )
-    
-    # ------------------------------------------------------------
-    # 이후 "st.markdown("### 👥 성도 참여(월 기준)")" 코드가 이어지면 됩니다.
 
-     
     st.markdown("### 👥 성도 참여(월 기준)")
     view_part = merged.rename(
         columns={
@@ -1228,6 +1229,7 @@ def admin_dashboard():
         use_container_width=True,
         hide_index=True,
     )
+    
     csv_part = view_part.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         "성도 참여(월 기준) CSV 다운로드",
@@ -1236,7 +1238,6 @@ def admin_dashboard():
         mime="text/csv",
         use_container_width=True,
     )
-
 
     st.markdown("---")
     st.markdown("### 🙏 중보기도 요청(Pray together in the Lord)")
@@ -1255,48 +1256,27 @@ def admin_dashboard():
         dfp["_use_date"] = dfp["_linked_dt"].dt.date
         dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
 
-        # 월 필터(선택한 월 기준)
         dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
 
         if view_mode.startswith("공동체"):
             dfp = dfp[dfp["is_public_bool"]]
 
-        dfp = dfp.sort_values(by=["_created_dt"], ascending=False, na_position="last")
+        dfp = dfp.sort_values(by=["_created_dt"], ascending=False)
 
-        view = dfp.rename(
-            columns={
-                "saints_info": "성도 정보",
-                "prayer_title": "기도 제목",
-                "prayer_content": "기도 내용",
-                "is_public_bool": "공동체 중보",
-                "linked_day": "연결 QT 날짜",
-                "created_at": "작성 시각",
-            }
-        )
+        view = dfp.rename(columns={
+            "saints_info": "성도 정보",
+            "prayer_title": "기도 제목",
+            "prayer_content": "기도 내용",
+            "is_public_bool": "공동체 중보",
+            "linked_day": "연결 QT 날짜",
+            "created_at": "작성 시각",
+        })
 
         cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
         st.dataframe(view[cols], use_container_width=True, hide_index=True)
 
-        # 다운로드(선택 월 기준)
         csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "중보기도 CSV 다운로드(선택 월)",
-            data=csv_p,
-            file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-        csv_all = dfp_all.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "중보기도 CSV 다운로드(전체 기간)",
-            data=csv_all,
-            file_name="intercessory_prayers_all.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 교구장/목회자/관리자 전용으로만 활용하세요.")
+        st.download_button("중보기도 CSV 다운로드(선택 월)", data=csv_p, file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
 
     st.markdown("### ⬇️ 데이터 다운로드")
     csv = dmonth.to_csv(index=False).encode("utf-8-sig")
@@ -1307,7 +1287,6 @@ def admin_dashboard():
         mime="text/csv",
         use_container_width=True,
     )
-    st.caption("※ 이름이 비어있는 UID는 성도님이 정보를 아직 저장하지 않은 경우입니다.")
 
 
 # -------------------------
