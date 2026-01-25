@@ -3,13 +3,14 @@ import os
 import secrets
 import json
 import re
+from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Optional, Tuple
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
-APP_BUILD = "weeklyfree_v2_2026-01-06"
+APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final_beacon_v2"
 
 
 import pandas as pd
@@ -30,14 +31,16 @@ except Exception:
 # 기본 설정
 # -------------------------
 APP_TITLE = "주만나와 함께 빚어가는, 예은의 향기"
-VERSE_TEXT = "하나님 보시기에 아름다운 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?"
+VERSE_TEXT = "하나님 보시기에 아름다운 예은 성도님, 오늘도 주만나를 통해 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?"
 SUPPORTED_MONTHS = [(2026, 1, "2026년 1월"), (2026, 2, "2026년 2월"), (2026, 3, "2026년 3월"), (2026, 4, "2026년 4월"), (2026, 5, "2026년 5월"), (2026, 6, "2026년 6월"), (2026, 7, "2026년 7월"), (2026, 8, "2026년 8월"), (2026, 9, "2026년 9월"), (2026, 10, "2026년 10월"), (2026, 11, "2026년 11월"), (2026, 12, "2026년 12월"),]
 
 SHEET_RECORDS = "qti_records"  # 일별 기록
 SHEET_USERS = "qti_users"      # uid별 성도 정보(직분/이름)
 SHEET_PRAYERS = "intercessory_prayers"  # 중보기도 요청(Pray together in the Lord)
 
-MEMBER_ROLES = ["평신도", "서리집사", "안수집사", "권사", "장로", "강도사", "목사", "기타"]
+MEMBER_ROLES = ["성도", "집사", "안수집사", "권사", "장로", "전도사", "강도사", "목사", "기타"]
+DISTRICTS = ["1교구", "2교구", "3교구", "4교구"]
+
 
 KST = ZoneInfo("Asia/Seoul")
 ADMIN_KEY_FALLBACK = "yeiun1234"  # secrets에 없을 때만 fallback
@@ -61,8 +64,30 @@ def now_hhmm_kst() -> str:
 
 
 def normalize_hhmm(s: str) -> str:
+    """Normalize various time formats from Google Sheets to HH:MM."""
     s = (s or "").strip()
-    return s if _HHMM.match(s) else ""
+    if not s:
+        return ""
+
+    # Common: 8:53, 08:53, 8:53:00, 08:53:00
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$", s)
+    if m:
+        hh = int(m.group(1))
+        mm = int(m.group(2))
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return f"{hh:02d}:{mm:02d}"
+
+    # Sometimes returned as full datetime strings (e.g., 1900-01-01 08:53:00)
+    try:
+        dt = pd.to_datetime(s, errors="coerce")
+        if pd.notna(dt):
+            return dt.strftime("%H:%M")
+    except Exception:
+        pass
+
+    # Fallback: already normalized?
+    s5 = s[:5]
+    return s5 if _HHMM.match(s5) else ""
 
 
 def clamp_50(s: str) -> str:
@@ -84,6 +109,11 @@ def clamp_1000(s: str) -> str:
 def normalize_role(s: str) -> str:
     s = (s or "").strip()
     return s if s in MEMBER_ROLES else (MEMBER_ROLES[-1] if s else "")
+
+
+def normalize_district(s: str) -> str:
+    s = (s or "").strip()
+    return s if s in DISTRICTS else (DISTRICTS[0] if s else "")
 
 
 def month_range(year: int, month: int) -> Tuple[date, date]:
@@ -179,8 +209,8 @@ def apply_css():
           /* share panel */
           #sharePanel {
             border-radius: 16px;
-            border: 1px solid rgba(0,0,0,0.06);
-            box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+            border: 2px solid rgba(176,124,255,0.75);  /* 강조(보라) */
+            box-shadow: 0 8px 22px rgba(0,0,0,0.06), 0 0 0 4px rgba(176,124,255,0.12);
             background: linear-gradient(135deg, #f7fbff 0%, #fff7fb 55%, #f6fff8 100%);
             overflow: hidden;
             margin-top: 6px;
@@ -190,10 +220,10 @@ def apply_css():
             display:flex;
             align-items:center;
             justify-content:space-between;
-            padding: 10px 12px;
+            padding: 12px 14px;
             font-weight: 900;
           }
-          #shareTitle { font-size: 18px; }
+          #shareTitle { font-size: 1.10rem; }
           #shareToggleBtn {
             appearance:none;
             border: 1px solid rgba(0,0,0,0.10);
@@ -211,7 +241,7 @@ def apply_css():
           }
           #shareToggleBtn:active { transform: scale(0.98); }
           #shareContent {
-            padding: 0 12px 12px 12px;
+            padding: 0 14px 14px 14px;
             overflow: hidden;
             transition: max-height 520ms ease, opacity 520ms ease, transform 520ms ease;
             max-height: 520px;
@@ -234,7 +264,7 @@ def apply_css():
             border-radius: 16px;
             overflow: hidden;
             box-shadow: 0 8px 22px rgba(0,0,0,0.07);
-            border: 1px solid rgba(0,0,0,0.06);
+            border: 2px solid rgba(176,124,255,0.75);  /* 강조(보라) */
           }
           table.qti-table thead th {
             text-align: center !important;
@@ -264,6 +294,67 @@ def apply_css():
           table.qti-table th:nth-child(4), table.qti-table td:nth-child(4) { width: 70px; }
           table.qti-table th:nth-child(5), table.qti-table td:nth-child(5) { width: auto; }
           table.qti-table tbody tr:last-child td { border-bottom: none; }
+
+          /* --- Pray together beacon (lighthouse) --- */
+          .prayer-title-row{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap: 10px;
+            margin: 2px 0 2px 0;
+          }
+          .prayer-title{
+            font-weight: 900;
+            font-size: 1.10rem;  /* ✍️ 오늘의 큐티 기록과 동일 크기 */
+            line-height: 1.2;
+            display:flex;
+            align-items:center;
+            gap: 8px;
+            user-select: none;
+          }
+          .prayer-icon-wrap{
+            position: relative;
+            display:inline-flex;
+            align-items:center;
+          }
+
+          /* --- Beacon (brighter + wider glow) --- */
+          .prayer-beacon{
+            position:absolute;
+            top:-11px;
+            right:-11px;
+            width:16px;
+            height:16px;
+            border-radius:999px;
+            background: rgba(253,230,138,1.0);
+            box-shadow:
+              0 0 18px 8px rgba(253,230,138,0.98),
+              0 0 38px 20px rgba(236,72,153,0.62),
+              0 0 58px 34px rgba(168,85,247,0.40);
+            animation: beaconPulse 0.92s infinite cubic-bezier(0.22, 1, 0.36, 1);
+          }
+          @keyframes beaconPulse{
+            0%   { transform: scale(0.62); opacity: .86;
+                   box-shadow:
+                     0 0 16px 7px rgba(253,230,138,0.92),
+                     0 0 30px 16px rgba(236,72,153,0.55),
+                     0 0 46px 26px rgba(168,85,247,0.32); }
+            55%  { transform: scale(1.08); opacity: 1.00;
+                   box-shadow:
+                     0 0 22px 10px rgba(253,230,138,1.00),
+                     0 0 46px 24px rgba(236,72,153,0.70),
+                     0 0 70px 40px rgba(168,85,247,0.46); }
+            100% { transform: scale(0.62); opacity: .86;
+                   box-shadow:
+                     0 0 16px 7px rgba(253,230,138,0.92),
+                     0 0 30px 16px rgba(236,72,153,0.55),
+                     0 0 46px 26px rgba(168,85,247,0.32); }
+          }
+
+          /* expander 헤더 숨김: 우측 '열기/닫기' 버튼만 사용 */
+          div[data-testid="stExpander"] > details > summary { display: none; }
+          div[data-testid="stExpander"] > details { border: none; padding: 0 !important; }
+        
         </style>
         """,
         unsafe_allow_html=True,
@@ -292,9 +383,9 @@ class GoogleSheetsStorage:
         "start_time", "end_time", "completed",
         "signature", "prayer_note", "updated_at"
     ]
-    USERS_REQUIRED = ["uid", "member_role", "member_name", "updated_at"]
+    USERS_REQUIRED = ["uid", "member_district", "member_role", "member_name", "updated_at"]
     PRAYERS_REQUIRED = [
-        "uid", "member_role", "member_name", "saints_info",
+        "uid", "member_district", "member_role", "member_name", "saints_info",
         "prayer_title", "prayer_content", "is_public",
         "created_at", "linked_day"
     ]
@@ -336,6 +427,12 @@ class GoogleSheetsStorage:
 
         self._row_index: dict[tuple[str, str], int] = {}  # (uid, day) -> row_idx
         self._index_built_at: float = 0.0
+
+        # Small in-memory DataFrame cache (keeps UI interactions snappy)
+        self._records_df_cache = None
+        self._records_df_cache_ts = 0.0
+        self._prayers_df_cache = None
+        self._prayers_df_cache_ts = 0.0
 
         # Verify schema once at creation (with retry/backoff)
         self._ensure_schema()
@@ -476,33 +573,71 @@ class GoogleSheetsStorage:
     def fetch_all_records_df(self) -> pd.DataFrame:
         """(관리/분석용) 전체 로드. 호출 횟수는 최소화해서 사용하세요."""
         self._ensure_schema()
+        import time
+        if self._records_df_cache is not None and (time.time() - self._records_df_cache_ts) < 20:
+            return self._records_df_cache.copy()
         rows = self._call_with_retries(self.ws.get_all_records)
         df_all = pd.DataFrame(rows)
         if df_all.empty:
-            return pd.DataFrame(columns=self.RECORDS_REQUIRED)
+            df_out = pd.DataFrame(columns=self.RECORDS_REQUIRED)
+            self._records_df_cache = df_out
+            import time
+            self._records_df_cache_ts = time.time()
+            return df_out.copy()
         for c in self.RECORDS_REQUIRED:
             if c not in df_all.columns:
                 df_all[c] = ""
-        return df_all[self.RECORDS_REQUIRED]
+        df_out = df_all[self.RECORDS_REQUIRED].copy()
+        self._records_df_cache = df_out
+        import time
+        self._records_df_cache_ts = time.time()
+        return df_out.copy()
 
     # -------------------------
     # Prayers (intercessory)
     # -------------------------
     def fetch_all_prayers_df(self) -> pd.DataFrame:
-        """(관리/목회자용) 중보기도 요청 전체 로드."""
+        """(관리/교구장/목회자용) 중보기도 요청 전체 로드."""
         self._ensure_schema()
+        import time
+        if self._prayers_df_cache is not None and (time.time() - self._prayers_df_cache_ts) < 20:
+            return self._prayers_df_cache.copy()
         rows = self._call_with_retries(self.ws_prayers.get_all_records)
         dfp = pd.DataFrame(rows)
         if dfp.empty:
-            return pd.DataFrame(columns=self.PRAYERS_REQUIRED)
+            df_out = pd.DataFrame(columns=self.PRAYERS_REQUIRED)
+            self._prayers_df_cache = df_out
+            import time
+            self._prayers_df_cache_ts = time.time()
+            return df_out.copy()
         for c in self.PRAYERS_REQUIRED:
             if c not in dfp.columns:
                 dfp[c] = ""
-        return dfp[self.PRAYERS_REQUIRED]
+        df_out = dfp[self.PRAYERS_REQUIRED].copy()
+        self._prayers_df_cache = df_out
+        import time
+        self._prayers_df_cache_ts = time.time()
+        return df_out.copy()
+
+    # -------------------------
+    # Users (profiles)
+    # -------------------------
+    def fetch_all_users_df(self) -> pd.DataFrame:
+        """(관리/분석용) 성도 프로필(users 시트) 전체 로드."""
+        self._ensure_schema()
+        rows = self._call_with_retries(self.ws_users.get_all_records)
+        dfu = pd.DataFrame(rows)
+        if dfu.empty:
+            return pd.DataFrame(columns=self.USERS_REQUIRED)
+        for c in self.USERS_REQUIRED:
+            if c not in dfu.columns:
+                dfu[c] = ""
+        return dfu[self.USERS_REQUIRED].copy()
 
     def insert_prayer_request(
         self,
         uid: str,
+        member_district: str,
         member_role: str,
         member_name: str,
         prayer_title: str,
@@ -513,11 +648,13 @@ class GoogleSheetsStorage:
         """중보기도 요청은 "추가(append)"로만 저장합니다(기록 변경 이력 보존)."""
         self._ensure_schema()
         now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+        district = normalize_district(member_district)
         role = normalize_role(member_role)
         name = clamp_20(member_name)
         title = clamp_50(prayer_title)
         content = clamp_300(prayer_content)
-        saints_info = f"{role} {name} ({uid})".strip()
+        who = f"{role} {name}".strip() if role else name
+        saints_info = f"{district}/{who}".strip("/") if district else who
         if linked_day:
             try:
                 linked_day = str(date.fromisoformat(str(linked_day))).strip()
@@ -528,6 +665,8 @@ class GoogleSheetsStorage:
         for h in self._prayers_header:
             if h == "uid":
                 row.append(str(uid))
+            elif h == "member_district":
+                row.append(district)
             elif h == "member_role":
                 row.append(role)
             elif h == "member_name":
@@ -548,32 +687,39 @@ class GoogleSheetsStorage:
                 row.append("")
 
         self._call_with_retries(self.ws_prayers.append_row, row, value_input_option="USER_ENTERED")
+        # Invalidate cached full prayers df
+        self._prayers_df_cache = None
+        self._prayers_df_cache_ts = 0.0
 
 
     # -------------------------
     # Profile (users sheet)
     # -------------------------
-    def get_profile(self, uid: str) -> Tuple[str, str]:
+    def get_profile(self, uid: str) -> Tuple[str, str, str]:
         self._ensure_schema()
         try:
             rows = self._call_with_retries(self.ws_users.get_all_records)
             dfu = pd.DataFrame(rows)
             if dfu.empty:
-                return "", ""
+                return "", "", ""
             hit = dfu[dfu["uid"].astype(str) == str(uid)]
             if hit.empty:
-                return "", ""
+                return "", "", ""
             if "updated_at" in hit.columns:
                 hit = hit.sort_values("updated_at")
             r = hit.iloc[-1]
-            return normalize_role(r.get("member_role", "")), clamp_20(r.get("member_name", ""))
+            district = normalize_district(r.get("member_district", ""))
+            role = normalize_role(r.get("member_role", ""))
+            name = clamp_20(r.get("member_name", ""))
+            return district, role, name
         except Exception:
-            return "", ""
+            return "", "", ""
 
-    def upsert_profile(self, uid: str, member_role: str, member_name: str):
+    def upsert_profile(self, uid: str, member_district: str, member_role: str, member_name: str):
         """프로필 저장은 자주 호출되지 않으므로 단순/안전하게 처리."""
         self._ensure_schema()
         now_iso = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+        district = normalize_district(member_district)
         role = normalize_role(member_role)
         name = clamp_20(member_name)
 
@@ -594,6 +740,8 @@ class GoogleSheetsStorage:
             for h in self._users_header:
                 if h == "uid":
                     new_row.append(str(uid))
+                elif h == "member_district":
+                    new_row.append(district)
                 elif h == "member_role":
                     new_row.append(role)
                 elif h == "member_name":
@@ -609,6 +757,7 @@ class GoogleSheetsStorage:
                 c = self.users_col_idx.get(colname)
                 if c:
                     cells.append(gspread.Cell(row_idx, c, str(val)))
+            q("member_district", district)
             q("member_role", role)
             q("member_name", name)
             q("updated_at", now_iso)
@@ -727,6 +876,9 @@ class GoogleSheetsStorage:
             # index is now stale; rebuild later
             self._row_index = {}
             self._index_built_at = 0.0
+            # Invalidate cached full records df
+            self._records_df_cache = None
+            self._records_df_cache_ts = 0.0
             return
 
         # update_cells 1회 호출
@@ -747,6 +899,9 @@ class GoogleSheetsStorage:
 
         if cells:
             self._call_with_retries(self.ws.update_cells, cells, value_input_option="USER_ENTERED")
+            # Invalidate cached full records df
+            self._records_df_cache = None
+            self._records_df_cache_ts = 0.0
 
 # local helper (kept near class; no other code touched)
 def _col_to_letter(n: int) -> str:
@@ -781,6 +936,121 @@ def cached_all_prayers_df() -> pd.DataFrame:
     if not s:
         return pd.DataFrame()
     return s.fetch_all_prayers_df()
+
+@st.cache_data(ttl=60)
+def cached_all_users_df() -> pd.DataFrame:
+    s = get_storage()
+    if not s:
+        return pd.DataFrame()
+    return s.fetch_all_users_df()
+
+
+
+
+# -------------------------
+# UID 디렉토리(성도별 UID/링크) 로드
+#  - GitHub(배포 repo)에서 app.py와 같은 폴더에 saints_uid_links.csv를 두면 자동 조회 가능
+#  - 컬럼 순서가 'block, member_name, member_role, uid, link'여도 동작(순서/누락 유연)
+# -------------------------
+_UID_DIR_PATH = Path(__file__).with_name("saints_uid_links.csv")
+
+@st.cache_data(ttl=30)
+def load_uid_directory() -> pd.DataFrame:
+    if not _UID_DIR_PATH.exists():
+        return pd.DataFrame(columns=["block", "member_name", "member_role", "uid", "link"])
+
+    # 인코딩 이슈 대비
+    try:
+        df = pd.read_csv(_UID_DIR_PATH, dtype=str).fillna("")
+    except Exception:
+        df = pd.read_csv(_UID_DIR_PATH, dtype=str, encoding="utf-8-sig").fillna("")
+
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # alias 대응(혹시 다른 이름으로 저장된 경우)
+    alias = {
+        "diocese": "block",
+        "district": "block",
+        "parish": "block",
+        "member_district": "block",
+        "name": "member_name",
+        "role": "member_role",
+    }
+    for old, new in alias.items():
+        if old in df.columns and new not in df.columns:
+            df[new] = df[old]
+
+    # 필요한 컬럼 보정
+    for c in ["block", "member_name", "member_role", "uid", "link"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    df = df[["block", "member_name", "member_role", "uid", "link"]].copy()
+    for c in df.columns:
+        df[c] = df[c].astype(str).str.strip()
+
+    df = df[df["member_name"] != ""].reset_index(drop=True)
+    return df
+
+def render_uid_lookup_page():
+    st.subheader("🔎 내 UID 주소 찾기")
+    st.caption("성도 이름으로 검색하여 본인 UID와 접속 링크를 확인할 수 있습니다. 복사할 수 있습니다.")
+
+    df_dir = load_uid_directory()
+    if df_dir.empty:
+        st.warning("UID 명단 파일(saints_uid_links.csv)을 찾지 못했습니다. GitHub에서 app.py와 같은 폴더에 업로드/커밋했는지 확인해 주세요.")
+        return
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        q = st.text_input("성도 이름 검색", placeholder="예) 정청운").strip()
+    with c2:
+        blocks = sorted([b for b in df_dir["block"].unique().tolist() if str(b).strip()])
+        block = st.selectbox("교구(선택)", ["전체"] + blocks, index=0)
+
+    filtered = df_dir.copy()
+    if block != "전체":
+        filtered = filtered[filtered["block"] == block]
+    if q:
+        filtered = filtered[filtered["member_name"].str.contains(q, na=False)]
+
+    if filtered.empty:
+        st.info("검색 결과가 없습니다.")
+        return
+
+    options = filtered.to_dict("records")
+
+    def _format_person(r):
+        b = (r.get("block") or "").strip()
+        role = (r.get("member_role") or "").strip()
+        name = (r.get("member_name") or "").strip()
+        main = " ".join([x for x in [role, name] if x])  # 예: '안수집사 정청운'
+        return f"{main}, {b}" if b else main
+
+    picked = st.selectbox("Select yourself", options=options, format_func=_format_person)
+
+    b = (picked.get("block") or "").strip()
+    role = (picked.get("member_role") or "").strip()
+    name = (picked.get("member_name") or "").strip()
+    uid = (picked.get("uid") or "").strip()
+    link = (picked.get("link") or "").strip()
+
+    main = " ".join([x for x in [role, name] if x])
+
+    if b:
+        st.success(f"✅ {main}'s UID access address from {b} is as follows.")
+    else:
+        st.success(f"✅ {main}'s UID access address is as follows.")
+
+    st.code(link, language="text")
+    st.write("UID")
+    st.code(uid, language="text")
+
+    if st.button("Go to record with this link", use_container_width=True, type="primary"):
+        # 라디오 위젯이 만들어진 뒤에 mode_select를 직접 바꾸면 에러가 날 수 있어
+        # 다음 rerun에서 처리하도록 플래그만 저장
+        st.session_state["__goto_record_uid"] = uid
+        st.rerun()
 
 
 def require_admin_login() -> bool:
@@ -822,7 +1092,6 @@ def compute_participation(df_all: pd.DataFrame, start: date, end: date) -> Tuple
     rate = (active / total) if total else 0.0
     return active, total, rate
 
-
 def admin_dashboard():
     st.header("📊 관리자 대시보드")
 
@@ -831,11 +1100,23 @@ def admin_dashboard():
         st.info("기록이 아직 없습니다.")
         return
 
+    # --- [개선] 현재 날짜 기준 자동 월 선택 로직 ---
+    cur_now = today_kst()
+    cur_y, cur_m = cur_now.year, cur_now.month
+    
+    # 지원하는 월 목록 중 현재 달의 인덱스 찾기 (2월이 되면 자동으로 2월 선택)
+    default_month_idx = 0
+    for i, (yy, mm, lbl) in enumerate(SUPPORTED_MONTHS):
+        if yy == cur_y and mm == cur_m:
+            default_month_idx = i
+            break
+
     c1, c2 = st.columns([1, 1])
     with c1:
-        anchor = st.date_input("기준일(주간 통계)", value=today_kst())
+        anchor = st.date_input("기준일(주간 통계)", value=cur_now)
     with c2:
-        month_label = st.selectbox("월(요약/다운로드)", [m[2] for m in SUPPORTED_MONTHS])
+        # 월 선택 박스: 시스템 날짜에 따라 기본값이 자동으로 바뀜
+        month_label = st.selectbox("월(요약/다운로드)", [m[2] for m in SUPPORTED_MONTHS], index=default_month_idx)
 
     y, m = [(yy, mm) for (yy, mm, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
     m_start, m_end = month_range(y, m)
@@ -843,109 +1124,211 @@ def admin_dashboard():
     wk_start = week_start_monday(anchor)
     wk_end = wk_start + timedelta(days=6)
 
-    a_wk, t_all, r_wk = compute_participation(df_all, wk_start, wk_end)
+    # 참여 데이터 계산 (월: 누적, 주: 순수 해당 주간)
     a_m, _, r_m = compute_participation(df_all, m_start, m_end)
+    a_wk, t_all, r_wk = compute_participation(df_all, wk_start, wk_end)
 
     st.markdown("### ✅ 참여 현황")
-    k1, k2, k3 = st.columns(3)
-    k1.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
-    k2.metric("이번 달 참여", f"{a_m}명", f"{r_m:.0%}")
-    k3.metric("전체 UID 수", f"{t_all}명")
 
-    # 최신 프로필(기록 기준 최신값)
+    # --- 프로필 및 데이터 통합 로직 ---
+    df_users = cached_all_users_df()
+    prof_users = pd.DataFrame(columns=["uid", "member_district", "member_role", "member_name"])
+    if not df_users.empty:
+        u = df_users.copy()
+        u["_t"] = pd.to_datetime(u.get("updated_at"), errors="coerce")
+        u = u.sort_values(["uid", "_t"])
+        prof_users = u.groupby("uid", as_index=False).tail(1)[["uid", "member_district", "member_role", "member_name"]].copy()
+
     latest = df_all.copy()
     latest["_t"] = pd.to_datetime(latest["updated_at"], errors="coerce")
     latest = latest.sort_values(["uid", "_t"])
-    prof = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
-    prof["member_role"] = prof["member_role"].fillna("").astype(str)
-    prof["member_name"] = prof["member_name"].fillna("").astype(str)
+    prof_rec = latest.groupby("uid", as_index=False).tail(1)[["uid", "member_role", "member_name"]].copy()
 
-    # 월 기준 참여일수
+    if prof_users.empty:
+        prof = prof_rec.copy()
+        prof["member_district"] = ""
+    else:
+        prof = prof_users.merge(prof_rec, on="uid", how="outer", suffixes=("", "_rec"))
+        prof["member_role"] = prof["member_role"].fillna(prof.get("member_role_rec")).fillna("")
+        prof["member_name"] = prof["member_name"].fillna(prof.get("member_name_rec")).fillna("")
+        prof["member_district"] = prof["member_district"].fillna("")
+        prof = prof.drop(columns=["member_role_rec", "member_name_rec"], errors="ignore")
+    
+    prof["uid"] = prof["uid"].astype(str)
+
+    # 월 기준 참여일수 집계
     dmonth = df_all[(df_all["day"] >= m_start.isoformat()) & (df_all["day"] <= m_end.isoformat())].copy()
     dmonth["completed_bool"] = dmonth["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
     cnts = dmonth[dmonth["completed_bool"]].groupby("uid", as_index=False)["day"].nunique().rename(columns={"day": "완료일수"})
+    
+    # 성도 참여 리스트 생성을 위한 데이터 병합
     merged = prof.merge(cnts, on="uid", how="left")
     merged["완료일수"] = merged["완료일수"].fillna(0).astype(int)
 
+    # 교구별 참여 현황 계산 (UID 기준)
+    uid_to_dist = dict(zip(merged["uid"], merged["member_district"]))
+    dist_uids = {}
+    for _uid, _d in uid_to_dist.items():
+        d = _d if str(_d).strip() else "(미입력)"
+        dist_uids.setdefault(d, set()).add(str(_uid))
+
+    dwk = df_all[(df_all["day"] >= wk_start.isoformat()) & (df_all["day"] <= wk_end.isoformat())].copy()
+    dwk["completed_bool"] = dwk["completed"].astype(str).str.lower().isin(["1", "true", "yes", "y", "완료"])
+    active_m_uids = set(dmonth[dmonth["completed_bool"]]["uid"].astype(str).tolist())
+    active_w_uids = set(dwk[dwk["completed_bool"]]["uid"].astype(str).tolist())
+
+    parish_rows = []
+    for d in sorted(dist_uids.keys()):
+        uids = dist_uids[d]
+        total_c = len(uids)
+        monthly_c = len(uids & active_m_uids)
+        weekly_c = len(uids & active_w_uids)
+        rate = (monthly_c / total_c) if total_c > 0 else 0.0
+        parish_rows.append({
+            "Diocese": d,
+            "전체 UID": total_c,
+            "이번 달 참여": monthly_c,
+            "이번 주 참여": weekly_c,
+            "참여율": f"{rate:.1%}"
+        })
+    df_parish = pd.DataFrame(parish_rows)
+
+    # --- [최종] 6:4 레이아웃 및 동적 레이블 반영 ---
+    col_metrics, col_table = st.columns([6, 4])
+
+    with col_metrics:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("전체 UID 수", f"{t_all}명")
+        # 선택된 월(m)에 따라 레이블 동적 변경
+        m2.metric(f"이번 달 참여({m}월)", f"{a_m}명", f"{r_m:.0%}")
+        m3.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
+
+    with col_table:
+        st.markdown("**교구별 참여 현황**")
+        if df_parish.empty:
+            st.caption("표시할 데이터가 없습니다.")
+        else:
+            st.dataframe(
+                df_parish.sort_values(["이번 달 참여", "이번 주 참여", "Diocese"], ascending=[False, False, True]),
+                use_container_width=True,
+                hide_index=True,
+            )
+
     st.markdown("### 👥 성도 참여(월 기준)")
+    view_part = merged.rename(
+        columns={
+            "uid": "UID",
+            "member_district": "Diocese",
+            "member_role": "MEMBER_ROLE",
+            "member_name": "MEMBER_NAME",
+            "완료일수": "Number of completion days",
+        }
+    )[["UID", "Diocese", "MEMBER_ROLE", "MEMBER_NAME", "Number of completion days"]]
     st.dataframe(
-        merged.sort_values(["완료일수", "member_name"], ascending=[False, True]),
+        view_part.sort_values(["Number of completion days", "MEMBER_NAME"], ascending=[False, True]),
         use_container_width=True,
         hide_index=True,
     )
-
-
-    st.markdown("---")
-    st.markdown("### 🙏 Pray together in the Lord (중보기도 요청)")
-
-    dfp_all = cached_all_prayers_df()
-    if dfp_all.empty:
-        st.info("중보기도 요청이 아직 없습니다.")
-    else:
-        view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0)
-
-        dfp = dfp_all.copy()
-        dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
-
-        dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
-        dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
-        dfp["_use_date"] = dfp["_linked_dt"].dt.date
-        dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
-
-        # 월 필터(선택한 월 기준)
-        dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
-
-        if view_mode.startswith("공동체"):
-            dfp = dfp[dfp["is_public_bool"]]
-
-        dfp = dfp.sort_values(by=["_created_dt"], ascending=False, na_position="last")
-
-        view = dfp.rename(
-            columns={
-                "saints_info": "성도 정보",
-                "prayer_title": "기도 제목",
-                "prayer_content": "기도 내용",
-                "is_public_bool": "공동체 중보",
-                "linked_day": "연결 QT 날짜",
-                "created_at": "작성 시각",
-            }
-        )
-
-        cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
-        st.dataframe(view[cols], use_container_width=True, hide_index=True)
-
-        # 다운로드(선택 월 기준)
-        csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "중보기도 CSV 다운로드(선택 월)",
-            data=csv_p,
-            file_name=f"intercessory_prayers_{m_start.strftime('%Y%m')}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-        csv_all = dfp_all.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "중보기도 CSV 다운로드(전체 기간)",
-            data=csv_all,
-            file_name="intercessory_prayers_all.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.caption("※ 기본은 '공동체 중보(공개)'만 표시됩니다. '전체'는 목회자/관리자 전용으로만 활용하세요.")
-
-    st.markdown("### ⬇️ 데이터 다운로드")
-    csv = dmonth.to_csv(index=False).encode("utf-8-sig")
+    
+    csv_part = view_part.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "월 데이터 CSV 다운로드",
-        data=csv,
-        file_name=f"qti_records_{m_start.strftime('%Y%m')}.csv",
+        "성도 참여(월 기준) CSV 다운로드",
+        data=csv_part,
+        file_name=f"congregation_participation_{m_start.strftime('%Y%m')}.csv",
         mime="text/csv",
         use_container_width=True,
     )
-    st.caption("※ 이름이 비어있는 UID는 성도님이 성도 정보를 아직 저장하지 않은 경우입니다.")
 
+    # --- [하단 레이아웃 개선] 중보기도(6) : 주소저장(4) ---
+    st.markdown("---")
+    
+    # 하나의 행을 6:4 비율로 생성
+    footer_col1, footer_col2 = st.columns([6, 4])
+
+    # 왼쪽 6할: 중보기도 요청 목록
+    with footer_col1:
+        st.markdown("### 🙏 중보기도 요청")
+        st.caption("Pray together in the Lord")
+
+        dfp_all = cached_all_prayers_df()
+        if dfp_all.empty:
+            st.info("중보기도 요청이 아직 없습니다.")
+        else:
+            # 관리자용 보기 옵션 선택
+            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_pray_view_final")
+            
+            dfp = dfp_all.copy()
+            dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
+            dfp["_created_dt"] = pd.to_datetime(dfp["created_at"], errors="coerce")
+            dfp["_linked_dt"] = pd.to_datetime(dfp["linked_day"], errors="coerce")
+            dfp["_use_date"] = dfp["_linked_dt"].dt.date
+            dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
+
+            # 선택된 월 기준 필터링 (m_start, m_end 사용)
+            dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
+            
+            if view_mode.startswith("공동체"):
+                dfp = dfp[dfp["is_public_bool"]]
+            
+            dfp = dfp.sort_values(by=["_created_dt"], ascending=False)
+
+            # 표 구성
+            view = dfp.rename(columns={
+                "saints_info": "성도 정보", "prayer_title": "기도 제목", "prayer_content": "기도 내용",
+                "is_public_bool": "공동체 중보", "linked_day": "연결 QT 날짜", "created_at": "작성 시각"
+            })
+            cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
+            st.dataframe(view[cols], use_container_width=True, hide_index=True)
+
+            # 다운로드 버튼
+            csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
+            st.download_button("중보기도 CSV 다운로드", data=csv_p, file_name=f"prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
+
+    # 오른쪽 4할: 나의 QT 주소 저장 패널
+    with footer_col2:
+        # 주소 빌드
+        # 주소 빌드 (관리자 화면에서는 uid가 없을 수 있으므로 query param에서 안전하게 가져옵니다)
+        uid_for_share = ""
+        try:
+            uid_for_share = str(st.query_params.get("uid", "") or "")
+        except Exception:
+            uid_for_share = ""
+        share_url = build_share_url(uid_for_share)
+        
+        # 시각적으로 정렬을 맞추기 위해 상단 여백을 조금 줍니다.
+        st.write("") 
+        st.write("")
+        st.markdown(
+            f"""
+            <div style="background-color: #f8f9fa; padding: 25px; border-radius: 12px; border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <div style="font-weight: 800; font-size: 1.15rem; margin-bottom: 12px; color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px;">
+                    📌 나의 QT 주소 저장
+                </div>
+                <p style="font-size: 0.9rem; color: #6c757d; line-height: 1.5; margin-bottom: 20px;">
+                    성도님만의 고유 접속 주소입니다. 브라우저 즐겨찾기나 '나와의 채팅방'에 보관해 주세요.
+                </p>
+                <div style="background: #ffffff; padding: 12px; border: 1px dashed #3498db; border-radius: 6px; word-break: break-all; font-family: 'Courier New', monospace; font-size: 0.85rem; color: #2980b9; margin-bottom: 15px;">
+                    {share_url}
+                </div>
+                <div style="text-align: center; font-size: 0.8rem; color: #e74c3c; font-weight: 600;">
+                    ※ 주소를 잊으시면 기존 기록 확인이 어렵습니다.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # 최하단 원본 데이터 다운로드 (전체 너비 사용)
+    st.markdown("---")
+    st.markdown("### ⬇️ 월간 원본 데이터 백업")
+    csv_raw = dmonth.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "선택한 월 전체 데이터(CSV) 다운로드",
+        data=csv_raw,
+        file_name=f"qti_records_{m_start.strftime('%Y%m')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
 
 # -------------------------
 # 앱 시작
@@ -1027,11 +1410,34 @@ if not storage:
     st.stop()
 
 st.title("✨ 주만나와 함께 빚어가는, 예은의 향기")
-st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나와 함께 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
+st.caption("하나님 보시기에 참 예쁜 예은 성도님, 오늘도 주만나를 통해 은혜의 깊은 곳으로 한 걸음 더 들어가 볼까요?")
 
-mode = st.radio("모드 선택", ["성도님(기록하기)", "관리자(대시보드)"], horizontal=True)
+
+# -------------------------
+# UID 찾기 화면에서 '이 링크로 기록하기로 이동'을 눌렀을 때
+# (라디오 위젯이 생성되기 전에) uid 쿼리파라미터와 모드 값을 안전하게 적용
+# -------------------------
+goto_uid = st.session_state.pop("__goto_record_uid", None)
+if goto_uid:
+    try:
+        st.query_params["uid"] = goto_uid
+    except Exception:
+        st.experimental_set_query_params(uid=goto_uid)
+
+    # 라디오 위젯 생성 전에 값 세팅 (안전)
+    st.session_state["mode_select"] = "성도님(기록하기)"
+    st.rerun()
+
+mode = st.radio("모드 선택", ["성도님(기록하기)", "내 UID 접속 주소 찾기", "관리자(대시보드)"], horizontal=True, key="mode_select")
 
 # 관리자
+
+# 내 UID 접속 주소 찾기
+if mode == "내 UID 접속 주소 찾기":
+    render_uid_lookup_page()
+    st.stop()
+
+
 if mode == "관리자(대시보드)":
     if require_admin_login():
         admin_dashboard()
@@ -1040,6 +1446,7 @@ if mode == "관리자(대시보드)":
 # -------------------------
 # 성도님 모드
 # -------------------------
+
 # UID 관리
 if "uid" not in st.query_params:
     st.info("### 🙏 큐티 체크리스트 시작하기\n성도님 전용 기록지를 만들기 위해 아래 버튼을 눌러주세요.")
@@ -1049,227 +1456,388 @@ if "uid" not in st.query_params:
         st.rerun()
     st.stop()
 
-uid = str(st.query_params["uid"])
+uid = st.query_params["uid"]
 
-# 성도 프로필 자동 불러오기/복구 (UID 기준)
+# 기본 상태 초기화
+if "picked_day" not in st.session_state:
+    st.session_state["picked_day"] = today_kst()
+
+if "month_label" not in st.session_state:
+    _cur = (today_kst().year, today_kst().month)
+    _labels = [m[2] for m in SUPPORTED_MONTHS]
+    _default_label = None
+    for y, m, lab in SUPPORTED_MONTHS:
+        if (y, m) == _cur:
+            _default_label = lab
+            break
+    st.session_state["month_label"] = _default_label or (_labels[0] if _labels else f"{_cur[0]}년 {_cur[1]}월")
+
+# 즉시 반영(리얼타임 보상감)용 로컬 오버라이드
+st.session_state.setdefault("local_qt_overrides", {})
+
+def _set_local(day_iso: str, **kwargs):
+    d = st.session_state["local_qt_overrides"].get(day_iso, {})
+    for k, v in kwargs.items():
+        if v is None:
+            continue
+        d[k] = v
+    st.session_state["local_qt_overrides"][day_iso] = d
+
+def _apply_overrides(df_in: pd.DataFrame) -> pd.DataFrame:
+    if df_in is None or df_in.empty:
+        return df_in
+    ov = st.session_state.get("local_qt_overrides", {})
+    if not ov:
+        return df_in
+    df2 = df_in.copy()
+    if "날짜" not in df2.columns:
+        return df2
+    for i, row in df2.iterrows():
+        ds = str(row.get("날짜", ""))
+        if ds in ov:
+            x = ov[ds]
+            if "start_time" in x and "QT 시작" in df2.columns:
+                df2.at[i, "QT 시작"] = (x.get("start_time") or df2.at[i, "QT 시작"])
+            if "end_time" in x and "QT 종료" in df2.columns:
+                df2.at[i, "QT 종료"] = (x.get("end_time") or df2.at[i, "QT 종료"])
+            if "completed" in x and "완료" in df2.columns:
+                df2.at[i, "완료"] = bool(x.get("completed"))
+            if "prayer_note" in x and "나의 묵상 기도" in df2.columns:
+                if (x.get("prayer_note") or "").strip():
+                    df2.at[i, "나의 묵상 기도"] = x.get("prayer_note")
+    return df2
+
+def _month_range_from_label(label: str) -> tuple[date, date]:
+    y, m = None, None
+    for yy, mm, lab in SUPPORTED_MONTHS:
+        if lab == label:
+            y, m = yy, mm
+            break
+    if y is None:
+        mm = re.findall(r"(\d{4})\D+(\d{1,2})", label or "")
+        if mm:
+            y, m = int(mm[0][0]), int(mm[0][1])
+        else:
+            y, m = today_kst().year, today_kst().month
+    start = date(y, m, 1)
+    if m == 12:
+        end = date(y + 1, 1, 1) - timedelta(days=1)
+    else:
+        end = date(y, m + 1, 1) - timedelta(days=1)
+    return start, end
+
+# 성도 프로필 자동 불러오기(최초 1회)
 if st.session_state.get("profile_loaded_uid") != uid:
-    prof0 = storage.get_profile(uid)
-    role0, name0 = "", ""
-    if isinstance(prof0, (list, tuple)):
-        if len(prof0) == 3:
-            _, role0, name0 = prof0
-        elif len(prof0) == 2:
-            role0, name0 = prof0
+    dist0, role0, name0 = storage.get_profile(uid)
 
+    # 기본값(세션에 값이 없을 때만 세팅)
+    st.session_state.setdefault("member_district", DISTRICTS[0])
+    st.session_state.setdefault("member_role", MEMBER_ROLES[0])
+    st.session_state.setdefault("member_name", "")
+
+    # 저장된 값이 있을 때만 덮어쓰기(관리자 모드 왕복 시 현재 입력값 유지)
+    if dist0:
+        st.session_state["member_district"] = normalize_district(dist0)
     if role0:
-        st.session_state["member_role"] = role0
-    elif "member_role" not in st.session_state:
-        st.session_state["member_role"] = MEMBER_ROLES[0]
-
+        st.session_state["member_role"] = normalize_role(role0)
     if name0:
-        st.session_state["member_name"] = name0
-    elif "member_name" not in st.session_state:
-        st.session_state["member_name"] = ""
+        st.session_state["member_name"] = str(name0)
 
     st.session_state["profile_loaded_uid"] = uid
+    st.session_state["profile_loaded"] = True
 
-# (안전장치) 화면 전환/세션 흔들림 등으로 입력값이 비어 보일 때, 저장된 값이 있으면 다시 채움
-if not str(st.session_state.get("member_name", "")).strip():
-    prof1 = storage.get_profile(uid)
-    role1, name1 = "", ""
-    if isinstance(prof1, (list, tuple)):
-        if len(prof1) == 3:
-            _, role1, name1 = prof1
-        elif len(prof1) == 2:
-            role1, name1 = prof1
-    if role1:
-        st.session_state["member_role"] = role1
-    if name1:
-        st.session_state["member_name"] = name1
+# ✅ 이 달 달성도(표시용) 계산 - 선택된 월 기준
+_m_label = st.session_state.get("month_label")
+_m_start, _m_end = _month_range_from_label(_m_label)
+df_month = _apply_overrides(storage.load_month(uid, _m_start, _m_end))
+done_cnt = int(df_month["완료"].sum()) if (df_month is not None and not df_month.empty and "완료" in df_month.columns) else 0
+total_cnt = int(len(df_month)) if df_month is not None else 0
+progress = (done_cnt / total_cnt) if total_cnt else 0.0
 
-# 성도 정보 입력(상단)
-st.markdown("---")
+# 1) 성도 정보(1회) + 이번 달 달성 (한 박스)
 with st.container(border=True):
     st.subheader("🙋 성도 정보(1회 입력)")
-    st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/이름/직분이 함께 저장됩니다.")
+    st.caption("한 번 입력하면 다음 접속 때 자동으로 불러오고, 이후 모든 기록에 uid/교구/직분/이름이 함께 저장됩니다.")
 
-    col_r, col_n, col_s = st.columns([1.2, 1.8, 1.0])
+    col_dist, col_r, col_n, col_s, col_a = st.columns([1, 1, 1, 1, 1])
+
+    with col_dist:
+        cur_dist = st.session_state.get("member_district", DISTRICTS[0])
+        didx = DISTRICTS.index(cur_dist) if cur_dist in DISTRICTS else 0
+        st.selectbox("교구", DISTRICTS, index=didx, key="member_district")
+
     with col_r:
         cur_role = st.session_state.get("member_role", MEMBER_ROLES[0])
-        idx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
-        st.selectbox("직분", MEMBER_ROLES, index=idx, key="member_role")
+        ridx = MEMBER_ROLES.index(cur_role) if cur_role in MEMBER_ROLES else 0
+        st.selectbox("직분", MEMBER_ROLES, index=ridx, key="member_role")
+
     with col_n:
         st.text_input("성도 이름", key="member_name", placeholder="예) 홍 길 동")
+
     with col_s:
         st.write("")
         st.write("")
         if st.button("💾 성도 정보 저장", use_container_width=True):
+            dist_clean = normalize_district(st.session_state.get("member_district", DISTRICTS[0]))
             role_clean = normalize_role(st.session_state.get("member_role", ""))
             name_clean = clamp_20(st.session_state.get("member_name", ""))
             if not name_clean:
                 st.warning("이름을 입력해 주세요.")
             else:
-                storage.upsert_profile(uid, role_clean, name_clean)
+                storage.upsert_profile(uid, dist_clean, role_clean, name_clean)
                 st.success("저장되었습니다! 다음 접속부터 자동으로 불러옵니다.")
                 st.rerun()
 
-    st.info(f"현재 저장 값: {normalize_role(st.session_state.get('member_role','')) or '-'} / {clamp_20(st.session_state.get('member_name','')) or '-'}")
+    with col_a:
+        st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.0%}")
+        st.progress(progress)
 
+    _d = normalize_district(st.session_state.get("member_district", ""))
+    _r = normalize_role(st.session_state.get("member_role", ""))
+    _n = clamp_20(st.session_state.get("member_name", "")) or "-"
+    st.info(f"현재 저장 값: {_d}/{_r} {_n}".strip())
 
-# 월 선택 + 이번 달 달성 (한 줄 2컬럼)
-col_month, col_ach = st.columns([1, 1])
-
-with col_month:
-    month_label = st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS])
-
-year, month = [(y, m) for (y, m, lbl) in SUPPORTED_MONTHS if lbl == month_label][0]
-START, END = month_range(year, month)
-
-# 월 데이터(월 진행률/전체보기용)
-df = storage.load_month(uid, START, END)
-
-# 진행률
-done_cnt = int(df["완료"].sum()) if not df.empty else 0
-total_cnt = len(df) if len(df) > 0 else 1
-progress = done_cnt / total_cnt
-
-with col_ach:
-    st.metric("✅ 이번 달 달성", f"{done_cnt}일", f"{progress:.1%}")
-    st.progress(progress)
-
-# 공유 링크 패널(자동 숨김 + 우측 아이콘 토글)
-share_url = build_share_url(uid)
-st.markdown(
-    """
-    <div id="sharePanel">
-      <div id="shareHeader">
-        <div id="shareTitle">📌 내 기록지 주소 저장하기</div>
-        <button id="shareToggleBtn" type="button">▴</button>
-      </div>
-      <div id="shareContent">
-        <div style="font-weight:800; margin-bottom:8px;">
-          이 주소를 꼭 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 하세요!
-        </div>
-    """,
-    unsafe_allow_html=True,
-)
-st.code(share_url)
-if "<YOUR-APP>" in share_url:
-    st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
-st.markdown("</div></div>", unsafe_allow_html=True)
-inject_share_panel_js()
-
-st.markdown("---")
-
-# 오늘 기록
+# ---------------------------------------------------------
+# 2) 큐티 기록 및 묵상 기도 (4:6 비율 레이아웃 적용)
+# ---------------------------------------------------------
 with st.container(border=True):
-    st.subheader("✍️ 오늘의 큐티 기록")
+    # 4:6 비율로 컬럼 나누기
+    col_left, col_right = st.columns([4, 6])
 
-    if "picked_day" not in st.session_state:
-        st.session_state["picked_day"] = today_kst()
-    picked_day = st.date_input("날짜 선택", value=st.session_state["picked_day"], key="picked_day")
-    day_str = picked_day.isoformat()
+    # --- 왼쪽 컬럼: 오늘의 큐티 기록 (4) ---
+    with col_left:
+        st.subheader("✍️ 오늘의 큐티 기록")
+        
+        # 날짜 선택을 세로로 배치하여 공간 확보
+        st.selectbox("📆 월 선택", [m[2] for m in SUPPORTED_MONTHS], key="month_label")
+        picked_day = st.date_input("날짜 선택", value=st.session_state["picked_day"], key="picked_day")
+        day_str = picked_day.isoformat()
 
-    role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
-    name_to_save = clamp_20(st.session_state.get("member_name", ""))
+        role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+        name_to_save = clamp_20(st.session_state.get("member_name", ""))
 
-    c1, c2, c3 = st.columns(3)
-    if c1.button("▶ 시작(현재시간)", use_container_width=True):
-        storage.upsert_one(uid, day_str, start_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
-        st.rerun()
-    if c2.button("■ 종료(현재시간)", use_container_width=True):
-        storage.upsert_one(uid, day_str, end_time=now_hhmm_kst(), member_role=role_to_save, member_name=name_to_save)
-        st.rerun()
+        # 데이터 로드
+        df_day = _apply_overrides(storage.load_month(uid, picked_day, picked_day))
+        day_row = df_day.iloc[0].to_dict() if (df_day is not None and not df_day.empty) else {}
+        cur_start = day_row.get("QT 시작", "") or ""
+        cur_end = day_row.get("QT 종료", "") or ""
+        cur_done = bool(day_row.get("완료", False))
+        cur_note = str(day_row.get("나의 묵상 기도", "") or "")
 
-    is_done = df[df["날짜"] == day_str]["완료"].values[0] if not df[df["날짜"] == day_str].empty else False
-    if c3.button("✅ " + ("취소" if is_done else "완료"), use_container_width=True):
-        storage.upsert_one(uid, day_str, completed=not is_done, member_role=role_to_save, member_name=name_to_save)
-        st.rerun()
-
-    st.markdown("### 🕊️ 나의 묵상 기도 (50자 이내)")
-    memo = st.text_area(
-        "경건의 시간 하나님님께서 주신 감동으로 한 줄 묵상 기도를 적어 보세요.",
-        height=90,
-        max_chars=50,
-        placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
-    )
-    if st.button("기록 저장하기", use_container_width=True, type="primary"):
-        storage.upsert_one(
-            uid, day_str,
-            signature="",
-            prayer_note=clamp_50(memo),
-            member_role=role_to_save,
-            member_name=name_to_save
-        )
-        st.success("저장되었습니다!")
-        st.rerun()
-
-
-
-
-st.markdown("---")
-with st.container(border=True):
-    st.subheader("🙏 Pray together in the Lord (함께 기도해요)")
-    st.caption("여기에 남긴 기도 제목은 목회자/중보팀이 수시로 확인하고 사랑으로 함께 기도합니다. (공개 게시판이 아닙니다)")
-
-    role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
-    name_to_save = clamp_20(st.session_state.get("member_name", ""))
-
-    pt = st.text_input("기도 제목(필수, 50자 이내)", max_chars=50, placeholder="예) 가족 구원을 위해", key="pray_title")
-    pc = st.text_area("기도 내용(선택, 300자 이내)", height=120, max_chars=300, placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.", key="pray_content")
-    pub = st.checkbox("공동체 중보 요청으로 표시(필요 시 교회 공지로 함께 기도 요청될 수 있어요)", value=True, key="pray_is_public")
-
-    if st.button("🙏 중보기도 요청 저장", use_container_width=True):
-        if not name_to_save:
-            st.warning("먼저 '성도 정보(이름)'를 저장해 주세요.")
-        elif not (pt or "").strip():
-            st.warning("기도 제목을 입력해 주세요.")
-        else:
-            # 오늘 선택된 날짜를 연결 정보로 함께 저장(선택)
-            linked = st.session_state.get("picked_day", today_kst()).isoformat()
-            storage.insert_prayer_request(
-                uid=str(uid),
-                member_role=role_to_save,
-                member_name=name_to_save,
-                prayer_title=pt,
-                prayer_content=pc,
-                is_public=bool(pub),
-                linked_day=linked,
-            )
-            st.success("기도 제목이 맡겨졌습니다. 함께 기도하겠습니다 🙏")
-            # 입력값 초기화
-            st.session_state["pray_title"] = ""
-            st.session_state["pray_content"] = ""
+        # 기록 버튼 (아이콘과 명칭 간소화)
+        c1, c2, c3 = st.columns(3)
+        if c1.button("▶ 시작", use_container_width=True, help="현재 시간으로 시작 기록"):
+            t = now_hhmm_kst()
+            storage.upsert_one(uid, day_str, start_time=t, member_role=role_to_save, member_name=name_to_save)
+            _set_local(day_str, start_time=t)
             st.rerun()
 
+        if c2.button("■ 종료", use_container_width=True, help="현재 시간으로 종료 기록"):
+            t = now_hhmm_kst()
+            storage.upsert_one(uid, day_str, end_time=t, member_role=role_to_save, member_name=name_to_save)
+            _set_local(day_str, end_time=t)
+            st.rerun()
 
-# 기록 확인(기본: 주간, 전체 보기 토글)
+        if c3.button("✅ " + ("취소" if cur_done else "완료"), use_container_width=True):
+            storage.upsert_one(uid, day_str, completed=not cur_done, member_role=role_to_save, member_name=name_to_save)
+            _set_local(day_str, completed=not cur_done)
+            st.rerun()
+
+        st.markdown("#### 🙌 실시간 확인")
+        v1, v2, v3 = st.columns(3)
+        with v1: st.metric("시작", cur_start or "—")
+        with v2: st.metric("종료", cur_end or "—")
+        with v3: st.metric("완료", "✅" if cur_done else "—")
+
+    # --- 오른쪽 컬럼: 나의 묵상 기도 (6) ---
+    with col_right:
+        st.subheader("🕊️ 나의 묵상 기도")
+        
+        # 날짜가 바뀔 때만 입력창 동기화 (기존 50자 제한 버그 수정)
+        if st.session_state.get("_note_day") != day_str:
+            st.session_state["_note_day"] = day_str
+            st.session_state["prayer_note_input"] = cur_note[:150]
+
+        memo = st.text_area(
+            "하나님 앞에 서 있는 내 모습을 생각하며 한 줄 기도를 적어 보세요.",
+            height=215,  # 왼쪽 섹션의 높이와 시각적 밸런스를 맞춤
+            max_chars=150,
+            placeholder="예) 주님, 오늘 말씀을 붙잡고 순종할 힘을 주세요.",
+            key="prayer_note_input",
+        )
+
+        if st.button("💾 묵상 기도 저장", use_container_width=True, type="primary"):
+            memo_clean = clamp_300(memo or "")  # 내부 저장용은 300자까지 허용하여 안전성 확보
+            storage.upsert_one(
+                uid, day_str,
+                signature="",
+                prayer_note=memo_clean,
+                member_role=role_to_save,
+                member_name=name_to_save,
+            )
+            _set_local(day_str, prayer_note=memo_clean)
+            st.success("기도가 저장되었습니다.")
+            st.rerun()
+
+# 3) 기록 확인(주간) - '묵상 기도 저장' 바로 아래
+with st.container(border=True):
+    st.subheader("📋 기록 확인 (주간)")
+    show_all = st.toggle("전체 보기 (한 달 전체)", value=False)
+
+    if show_all:
+        df_all = _apply_overrides(storage.load_month(uid, _m_start, _m_end))
+        render_qt_table_html(df_all)
+    else:
+        anchor = st.session_state.get("picked_day", today_kst())
+        wk_start = week_start_monday(anchor)
+        wk_end = wk_start + timedelta(days=6)
+
+        def _shift_week(delta_days: int):
+            a = st.session_state.get("picked_day", today_kst())
+            st.session_state["picked_day"] = a + timedelta(days=delta_days)
+
+        nav1, nav2, _sp = st.columns([1, 1, 2])
+        with nav1:
+            st.button("⬅️ 이전 주", use_container_width=True, on_click=_shift_week, args=(-7,))
+        with nav2:
+            st.button("다음 주 ➡️", use_container_width=True, on_click=_shift_week, args=(+7,))
+
+        st.caption(f"표시 기간: {wk_start.isoformat()} ~ {wk_end.isoformat()} (월~일)")
+        df_week = _apply_overrides(storage.load_month(uid, wk_start, wk_end))
+        render_qt_table_html(df_week)
+
+# --- [하단 레이아웃 개선] 중보기도(6) : 주소저장(4) ---
 st.markdown("---")
-st.subheader("📋 기록 확인 (주간)")
-show_all = st.toggle("전체 보기 (한 달 전체)", value=False)
+footer_col1, footer_col2 = st.columns([6, 4], gap="large")
 
-if show_all:
-    render_qt_table_html(df)
-else:
-    # ✅ 주간 표시: '월 선택 범위(START~END)'와 무관하게 항상 7일(월~일) 표를 보여줍니다.
-    # - 데이터가 없으면 빈 값으로 표시
-    # - 다른 달/미래 주도 이동 가능
-    anchor = st.session_state.get("picked_day", today_kst())
-    wk_start = week_start_monday(anchor)
-    wk_end = wk_start + timedelta(days=6)
+with footer_col1:
+    # 4) Pray together (중보기도 요청) - 기본 숨김 + 비콘(등대) + 우측 '열기/닫기'
+    with st.container(border=True):
+        # 패널 상태(기본 닫힘)
+        if "pray_panel_open" not in st.session_state or not isinstance(st.session_state.get("pray_panel_open"), bool):
+            st.session_state["pray_panel_open"] = False
 
-    def _shift_week(delta_days: int):
-        a = st.session_state.get("picked_day", today_kst())
-        # 월 범위로 clamp 하지 않음(주간 표는 항상 이동 가능)
-        st.session_state["picked_day"] = a + timedelta(days=delta_days)
+        def _toggle_pray_panel():
+            st.session_state["pray_panel_open"] = not st.session_state.get("pray_panel_open", False)
+            st.session_state["pray_err"] = ""
 
-    nav1, nav2, _ = st.columns([1, 1, 2])
-    with nav1:
-        st.button("⬅️ 이전 주", use_container_width=True, on_click=_shift_week, args=(-7,))
-    with nav2:
-        st.button("다음 주 ➡️", use_container_width=True, on_click=_shift_week, args=(+7,))
+        # 제목(항상 노출) + 비콘(항상 점멸) + 우측 버튼
+        left, right = st.columns([6, 1])
+        with left:
+            st.markdown(
+                '''
+                <div class="prayer-title-row">
+                  <div class="prayer-title">
+                    <span class="prayer-icon-wrap">🙏<span class="prayer-beacon"></span></span>
+                    <span>Pray together in the Lord (중보기도 요청)</span>
+                  </div>
+                </div>
+                ''',
+                unsafe_allow_html=True,
+            )
 
-    st.caption(f"표시 기간: {wk_start.isoformat()} ~ {wk_end.isoformat()} (월~일)")
-    # 주간 표는 해당 7일만 로드(없는 날짜는 빈 행 생성)
-    df_week = storage.load_month(uid, wk_start, wk_end)
-    render_qt_table_html(df_week)
+        with right:
+            btn_label = "열기" if not st.session_state.get("pray_panel_open", False) else "닫기"
+            st.button(btn_label, key="pray_toggle_btn", use_container_width=True, on_click=_toggle_pray_panel)
+
+        # 내용은 기본 숨김. expander의 슬라이딩 애니메이션을 사용하고, 헤더는 CSS로 숨깁니다.
+        with st.expander(" ", expanded=st.session_state.get("pray_panel_open", False)):
+            st.caption("공동체가 함께 기도할 제목이 있다면 자유롭게 남겨주세요. (체크 시 공동체 중보에 표시됩니다.)")
+
+            st.session_state.setdefault("pray_title", "")
+            st.session_state.setdefault("pray_content", "")
+            st.session_state.setdefault("pray_is_public", False)
+            st.session_state.setdefault("pray_err", "")
+            st.session_state.setdefault("pray_ok", False)
+            st.session_state.setdefault("pray_last_info", "")
+            st.session_state.setdefault("pray_last_title", "")
+
+            st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 나의 건강 회복을 위해, 가족의 구원을 위해...등", key="pray_title")
+            st.text_area(
+                "기도 내용(선택, 500자 이내)",
+                height=120,
+                max_chars=500,
+                placeholder="예) 이번 주 중요한 수술을 앞두고 있습니다. 담대함과 평안을 주세요.",
+                key="pray_content",
+            )
+
+            tcol2, ccol2 = st.columns([3, 1])
+            with tcol2:
+                st.markdown("**중보기도가 필요합니다. 함께 기도해주세요.**")
+            with ccol2:
+                st.checkbox("중보기도 요청", key="pray_is_public")  # 기본: 미체크(False)
+
+            def _submit_prayer():
+                district_to_save = normalize_district(st.session_state.get("member_district", DISTRICTS[0]))
+                role_to_save = normalize_role(st.session_state.get("member_role", MEMBER_ROLES[0]))
+                name_to_save = clamp_20(st.session_state.get("member_name", ""))
+
+                ptv = (st.session_state.get("pray_title") or "").strip()
+                pcv = (st.session_state.get("pray_content") or "").strip()
+                pubv = bool(st.session_state.get("pray_is_public", False))
+
+                if not name_to_save:
+                    st.session_state["pray_err"] = "먼저 '성도 정보(교구/직분/이름)'를 저장해 주세요."
+                    st.session_state["pray_ok"] = False
+                    return
+                if not ptv:
+                    st.session_state["pray_err"] = "기도 제목을 입력해 주세요."
+                    st.session_state["pray_ok"] = False
+                    return
+
+                linked = st.session_state.get("picked_day", today_kst()).isoformat()
+                storage.insert_prayer_request(
+                    uid=str(uid),
+                    member_district=district_to_save,
+                    member_role=role_to_save,
+                    member_name=name_to_save,
+                    prayer_title=ptv,
+                    prayer_content=pcv,
+                    is_public=pubv,
+                    linked_day=linked,
+                )
+
+                who = (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
+                st.session_state["pray_last_info"] = f"{district_to_save}/{who}".strip("/")
+                st.session_state["pray_last_title"] = ptv
+
+                # 입력 초기화(콜백 안에서만)
+                st.session_state["pray_title"] = ""
+                st.session_state["pray_content"] = ""
+                st.session_state["pray_is_public"] = False
+                st.session_state["pray_err"] = ""
+                st.session_state["pray_ok"] = True
+
+            st.button("🙏 중보기도 요청 저장", use_container_width=True, on_click=_submit_prayer)
+
+            if st.session_state.get("pray_err"):
+                st.warning(st.session_state["pray_err"])
+            elif st.session_state.get("pray_ok"):
+                info = st.session_state.get("pray_last_info") or ""
+                title = st.session_state.get("pray_last_title") or ""
+                if info and title:
+                    st.success(f"({info}) '{title}' 중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
+                else:
+                    st.success("중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
+
+with footer_col2:
+    share_url = build_share_url(uid)
+    st.markdown(
+        """
+        <div id="sharePanel">
+          <div id="shareHeader">
+            <div id="shareTitle">📌 나의 QT 주소(UID) 저장</div>
+            <button id="shareToggleBtn" type="button">▴</button>
+          </div>
+          <div id="shareContent">
+            <div style="font-weight:800; margin-bottom:8px;">
+              이 주소를 꼭 복사해서 카톡 ‘나에게 보내기’에 저장하거나 즐겨찾기 하세요!
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.code(share_url)
+    if "<YOUR-APP>" in share_url:
+        st.warning("PUBLIC_APP_URL이 설정되지 않아 임시 주소가 보입니다. Secrets에 실제 앱 주소를 넣어주세요.")
+    st.markdown("</div></div>", unsafe_allow_html=True)
+    inject_share_panel_js()
