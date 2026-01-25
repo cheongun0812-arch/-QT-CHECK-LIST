@@ -1287,7 +1287,13 @@ def admin_dashboard():
     # 오른쪽 4할: 나의 QT 주소 저장 패널
     with footer_col2:
         # 주소 빌드
-        share_url = build_share_url(uid)
+        # 주소 빌드 (관리자 화면에서는 uid가 없을 수 있으므로 query param에서 안전하게 가져옵니다)
+        uid_for_share = ""
+        try:
+            uid_for_share = str(st.query_params.get("uid", "") or "")
+        except Exception:
+            uid_for_share = ""
+        share_url = build_share_url(uid_for_share)
         
         # 시각적으로 정렬을 맞추기 위해 상단 여백을 조금 줍니다.
         st.write("") 
