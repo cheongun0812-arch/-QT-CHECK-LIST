@@ -1239,13 +1239,10 @@ def admin_dashboard():
         use_container_width=True,
     )
 
-    # --- [하단 레이아웃 개선] 중보기도(6) : 주소저장(4) ---
+   # --- [오류 해결 및 레이아웃 유지] 중보기도(6) : 관리자 안내(4) ---
     st.markdown("---")
-    
-    # 하나의 행을 6:4 비율로 생성
     footer_col1, footer_col2 = st.columns([6, 4])
 
-    # 왼쪽 6할: 중보기도 요청 목록
     with footer_col1:
         st.markdown("### 🙏 중보기도 요청")
         st.caption("Pray together in the Lord")
@@ -1254,8 +1251,8 @@ def admin_dashboard():
         if dfp_all.empty:
             st.info("중보기도 요청이 아직 없습니다.")
         else:
-            # 관리자용 보기 옵션 선택
-            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_pray_view_final")
+            # 관리자용 위젯에 고유 key를 부여하여 충돌 방지
+            view_mode = st.selectbox("보기 옵션", ["공동체 중보(공개)", "전체(비공개 포함)"], index=0, key="admin_footer_pray_view_v3")
             
             dfp = dfp_all.copy()
             dfp["is_public_bool"] = dfp["is_public"].astype(str).str.lower().isin(["true", "1", "yes", "y", "공개"])
@@ -1264,15 +1261,12 @@ def admin_dashboard():
             dfp["_use_date"] = dfp["_linked_dt"].dt.date
             dfp.loc[dfp["_use_date"].isna(), "_use_date"] = dfp["_created_dt"].dt.date
 
-            # 선택된 월 기준 필터링 (m_start, m_end 사용)
+            # 선택된 월 기준 필터링
             dfp = dfp[(dfp["_use_date"] >= m_start) & (dfp["_use_date"] <= m_end)] if not dfp.empty else dfp
-            
             if view_mode.startswith("공동체"):
                 dfp = dfp[dfp["is_public_bool"]]
-            
             dfp = dfp.sort_values(by=["_created_dt"], ascending=False)
 
-            # 표 구성
             view = dfp.rename(columns={
                 "saints_info": "성도 정보", "prayer_title": "기도 제목", "prayer_content": "기도 내용",
                 "is_public_bool": "공동체 중보", "linked_day": "연결 QT 날짜", "created_at": "작성 시각"
@@ -1280,39 +1274,31 @@ def admin_dashboard():
             cols = [c for c in ["성도 정보", "기도 제목", "기도 내용", "공동체 중보", "연결 QT 날짜", "작성 시각"] if c in view.columns]
             st.dataframe(view[cols], use_container_width=True, hide_index=True)
 
-            # 다운로드 버튼
             csv_p = dfp.drop(columns=["_created_dt", "_linked_dt", "_use_date"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
             st.download_button("중보기도 CSV 다운로드", data=csv_p, file_name=f"prayers_{m_start.strftime('%Y%m')}.csv", mime="text/csv", use_container_width=True)
 
-    # 오른쪽 4할: 나의 QT 주소 저장 패널
     with footer_col2:
-        # 주소 빌드
-        share_url = build_share_url(uid)
-        
-        # 시각적으로 정렬을 맞추기 위해 상단 여백을 조금 줍니다.
+        # ⚠️ NameError 해결: uid 변수 참조를 제거하고 관리자 안내로 교체
         st.write("") 
         st.write("")
         st.markdown(
             f"""
-            <div style="background-color: #f8f9fa; padding: 25px; border-radius: 12px; border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-weight: 800; font-size: 1.15rem; margin-bottom: 12px; color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px;">
-                    📌 나의 QT 주소 저장
+            <div style="background-color: #f8f9fa; padding: 25px; border-radius: 12px; border: 1px solid #e9ecef;">
+                <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 12px; color: #2c3e50; border-left: 4px solid #e67e22; padding-left: 10px;">
+                    📢 관리자 대시보드 안내
                 </div>
-                <p style="font-size: 0.9rem; color: #6c757d; line-height: 1.5; margin-bottom: 20px;">
-                    성도님만의 고유 접속 주소입니다. 브라우저 즐겨찾기나 '나와의 채팅방'에 보관해 주세요.
+                <p style="font-size: 0.85rem; color: #6c757d; line-height: 1.6;">
+                    이 화면은 <b>교회 전체 통계</b>를 확인하는 관리자 전용 페이지입니다.<br><br>
+                    성도님 개인이 사용하는 '나의 QT 주소' 확인이나 큐티 기록 입력은 <b>'성도님 모드'</b>로 전환하여 확인해 주세요.
                 </p>
-                <div style="background: #ffffff; padding: 12px; border: 1px dashed #3498db; border-radius: 6px; word-break: break-all; font-family: 'Courier New', monospace; font-size: 0.85rem; color: #2980b9; margin-bottom: 15px;">
-                    {share_url}
-                </div>
-                <div style="text-align: center; font-size: 0.8rem; color: #e74c3c; font-weight: 600;">
-                    ※ 주소를 잊으시면 기존 기록 확인이 어렵습니다.
+                <div style="text-align: center; font-size: 0.8rem; color: #e67e22; font-weight: 600; margin-top: 15px; border-top: 1px solid #eee; padding-top: 10px;">
+                    ※ 관리자 로그아웃 후 개인 주소로 접속하세요.
                 </div>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    # 최하단 원본 데이터 다운로드 (전체 너비 사용)
     st.markdown("---")
     st.markdown("### ⬇️ 월간 원본 데이터 백업")
     csv_raw = dmonth.to_csv(index=False).encode("utf-8-sig")
