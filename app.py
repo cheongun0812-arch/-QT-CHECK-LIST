@@ -1180,18 +1180,32 @@ def admin_dashboard():
     parish_rows = []
     for d in sorted(dist_uids.keys()):
         uids = dist_uids[d]
+        total_c = len(uids)
+        monthly_c = len(uids & active_m_uids)
+        # 참여율 계산 (이번 달 참여 / 전체 UID)
+        rate = (monthly_c / total_c) if total_c > 0 else 0.0
         parish_rows.append({
             "Diocese": d,
-            "전체 UID": len(uids),
-            "이번 달 참여": len(uids & active_m_uids),
+            "전체 UID": total_c,
+            "이번 달 참여": monthly_c,
             "이번 주 참여": len(uids & active_w_uids),
+            "참여율": f"{rate:.1%}"  # 5번째 칸 추가
         })
     df_parish = pd.DataFrame(parish_rows)
 
-    k_total, k_parish, k_month, k_week = st.columns(4)
-    k_total.metric("전체 UID 수", f"{t_all}명")
-    with k_parish:
-        st.markdown("**교구별 참여**")
+   # --- [수정 시작] 6:4 비율 레이아웃 적용 ---
+    col_metrics, col_table = st.columns([6, 4])
+
+    # 왼쪽 6할: 주요 지표 (전체 UID 수, 이번 달 참여, 이번 주 참여)
+    with col_metrics:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("전체 UID 수", f"{t_all}명")
+        m2.metric("이번 달 참여", f"{a_m}명", f"{r_m:.0%}")
+        m3.metric("이번 주 참여", f"{a_wk}명", f"{r_wk:.0%}")
+
+    # 오른쪽 4할: 교구별 참여 현황 표 (5개 컬럼)
+    with col_table:
+        st.markdown("**교구별 참여 현황**")
         if df_parish.empty:
             st.caption("표시할 데이터가 없습니다.")
         else:
