@@ -175,6 +175,9 @@ def _split_emails(v: str) -> list[str]:
 # - st.secrets에 INTERCESSORY_PRAYER_TO가 설정되어 있으면 그 값을 우선 사용합니다.
 DEFAULT_INTERCESSORY_PRAYER_TO = [
     "cheongun0812@gmail.com",   # Ordained Deacon Committee (Cheongun Jeong)
+]
+
+DEFAULT_INTERCESSORY_PRAYER_CC = [
     "dmstjd0407@naver.com",     # Pastor Ha Eun-seong
     "pnuma17@naver.com",        # Pastor Damhoon Park
     "ecobible@gmail.com",       # Elder Seong Seong-je
@@ -191,12 +194,10 @@ def build_intercessory_email_subject(
     """사용자 요청 포맷:
     [Urgent Intercessory Prayer Request] OOOO prayer subject
 
-    - OOOO: 교구/직분/이름을 합친 '성도 정보'
+    - OOOO: 성도 이름(미입력 시 'Congregant')
     - prayer subject: 기도 제목
     """
-    congregation_info = " ".join([x for x in [district, role, name] if x]).strip()
-    if not congregation_info:
-        congregation_info = "Congregant"
+    congregation_info = (name or "").strip() or "Congregant"
 
     short_title = (prayer_title or "").strip()
     if len(short_title) > 60:
@@ -261,10 +262,13 @@ def send_intercessory_prayer_email(
         return False, "email disabled"
 
     # 받는 사람
+    # - To: 청운정 안수집사위원회 메일(항상 포함) + (선택) secrets의 INTERCESSORY_PRAYER_TO
+    # - Cc: 담당 리더십(기본 포함) + (선택) secrets의 INTERCESSORY_PRAYER_CC
     custom_to = _split_emails(st.secrets.get("INTERCESSORY_PRAYER_TO", ""))
-    # 기본 수신자는 항상 포함(committee 메일 포함) + secrets에 추가 수신자 지정 가능
+    custom_cc = _split_emails(st.secrets.get("INTERCESSORY_PRAYER_CC", ""))
+
     to_list = list(dict.fromkeys(DEFAULT_INTERCESSORY_PRAYER_TO + custom_to))
-    cc_list = _split_emails(st.secrets.get("INTERCESSORY_PRAYER_CC", ""))
+    cc_list = list(dict.fromkeys(DEFAULT_INTERCESSORY_PRAYER_CC + custom_cc))
     if not to_list:
         return False, "no recipients"
 
@@ -1966,11 +1970,10 @@ with footer_col1:
                     linked_day=linked,
                 )
 
-                # 이메일 알림(공동체 중보 요청 체크 시)
+                # 이메일 알림(중보기도 요청 저장 시)
                 st.session_state["pray_email_err"] = ""
                 created_at_dt = now_kst()
-                if pubv:
-                    ok_email, email_status = send_intercessory_prayer_email(
+                ok_email, email_status = send_intercessory_prayer_email(
                         district=district_to_save,
                         role=role_to_save,
                         name=name_to_save,
@@ -1981,9 +1984,9 @@ with footer_col1:
                         linked_day=linked,
                         created_at_dt=created_at_dt,
                     )
-                    if not ok_email:
-                        # 설정 누락/전송 실패 모두 사용자에게 알려줍니다(저장은 이미 완료).
-                        st.session_state["pray_email_err"] = "⚠️ 중보기도 요청은 저장되었지만 이메일 알림 전송이 되지 않았습니다. (관리자에게 확인 요청)"
+                if not ok_email:
+                    # 설정 누락/전송 실패 모두 사용자에게 알려줍니다(저장은 이미 완료).
+                    st.session_state["pray_email_err"] = "⚠️ 중보기도 요청은 저장되었지만 이메일 알림 전송이 되지 않았습니다. (관리자에게 확인 요청)"
 
 
                 who = (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
