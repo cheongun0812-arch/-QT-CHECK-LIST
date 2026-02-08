@@ -10,6 +10,10 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
+import smtplib
+import ssl
+from email.message import EmailMessage
+
 APP_BUILD = "weeklyfree_v2_2026-01-22_layout_final_beacon_v2"
 
 
@@ -154,6 +158,169 @@ def build_share_url(uid: str) -> str:
         base = "https://<YOUR-APP>.streamlit.app"
 
     return f"{base}?{urlencode({'uid': uid})}"
+
+
+# -------------------------
+# 중보기도 요청 즉시 이메일 알림
+# -------------------------
+def _split_emails(v: str) -> list[str]:
+    # "a@x.com,b@y.com; c@z.com" 형태 모두 지원
+    if not v:
+        return []
+    parts = re.split(r"[;,\s]+", str(v))
+    return [p.strip() for p in parts if p.strip()]
+
+
+# 기본 수신자(청운정 안수집사위원회 및 담당 리더십)
+# - st.secrets에 INTERCESSORY_PRAYER_TO가 설정되어 있으면 그 값을 우선 사용합니다.
+DEFAULT_INTERCESSORY_PRAYER_TO = [
+    "cheongun0812@gmail.com",   # Ordained Deacon Committee (Cheongun Jeong)
+    "dmstjd0407@naver.com",     # Pastor Ha Eun-seong
+    "pnuma17@naver.com",        # Pastor Damhoon Park
+    "ecobible@gmail.com",       # Elder Seong Seong-je
+]
+
+def build_intercessory_email_subject(
+    district: str,
+    role: str,
+    name: str,
+    prayer_title: str,
+    linked_day: str,
+    is_public: bool,
+) -> str:
+    """사용자 요청 포맷:
+    [Urgent Intercessory Prayer Request] OOOO prayer subject
+
+    - OOOO: 교구/직분/이름을 합친 '성도 정보'
+    - prayer subject: 기도 제목
+    """
+    congregation_info = " ".join([x for x in [district, role, name] if x]).strip()
+    if not congregation_info:
+        congregation_info = "Congregant"
+
+    short_title = (prayer_title or "").strip()
+    if len(short_title) > 60:
+        short_title = short_title[:60] + "…"
+
+    # linked_day, is_public는 본문에 포함되므로 제목은 단순화합니다.
+    return f"[Urgent Intercessory Prayer Request] {congregation_info} {short_title}".strip()
+
+
+
+def build_intercessory_email_body(
+    district: str,
+    role: str,
+    name: str,
+    uid: str,
+    prayer_title: str,
+    prayer_content: str,
+    is_public: bool,
+    linked_day: str,
+    created_at_kst: str,
+) -> str:
+    who = " ".join([x for x in [role, name] if x]).strip() or name or "-"
+    d = district or "-"
+    pub_txt = "예(공동체 중보 요청)" if is_public else "아니오"
+    app_url = st.secrets.get("PUBLIC_APP_URL") or ""
+    lines = [
+        "🙏 중보기도 요청이 등록되었습니다.",
+        "",
+        f"- 성도 정보: {d} / {who} (UID: {uid})",
+        f"- 기도 제목: {prayer_title}",
+        f"- 기도 내용: {prayer_content or '(미입력)'}",
+        f"- 공동체 중보 체크: {pub_txt}",
+        f"- 요청일(QT 날짜): {linked_day}",
+        f"- 생성 시각(KST): {created_at_kst}",
+    ]
+    if app_url:
+        lines += ["", f"- 관리자 확인 링크(앱): {app_url}"]
+        lines += ["  (앱 접속 → 관리자 모드 → 'Intercessory Prayer Request' 확인)"]
+    return "\n".join(lines)
+
+def send_intercessory_prayer_email(
+    district: str,
+    role: str,
+    name: str,
+    uid: str,
+    prayer_title: str,
+    prayer_content: str,
+    is_public: bool,
+    linked_day: str,
+    created_at_dt: datetime,
+) -> tuple[bool, str]:
+    """
+    중보기도 요청을 이메일로 즉시 발송합니다.
+    - 설정은 st.secrets로 받습니다.
+      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM(optional)
+      INTERCESSORY_PRAYER_TO (comma/space separated)
+      INTERCESSORY_PRAYER_CC (optional)
+      SEND_INTERCESSORY_EMAIL = "true"/"false"(optional, default true)
+    """
+    enabled = str(st.secrets.get("SEND_INTERCESSORY_EMAIL", "true")).strip().lower() not in ("0", "false", "no", "off")
+    if not enabled:
+        return False, "email disabled"
+
+    # 받는 사람
+    custom_to = _split_emails(st.secrets.get("INTERCESSORY_PRAYER_TO", ""))
+    # 기본 수신자는 항상 포함(committee 메일 포함) + secrets에 추가 수신자 지정 가능
+    to_list = list(dict.fromkeys(DEFAULT_INTERCESSORY_PRAYER_TO + custom_to))
+    cc_list = _split_emails(st.secrets.get("INTERCESSORY_PRAYER_CC", ""))
+    if not to_list:
+        return False, "no recipients"
+
+    smtp_host = st.secrets.get("SMTP_HOST")
+    smtp_user = st.secrets.get("SMTP_USER")
+    smtp_pass = st.secrets.get("SMTP_PASSWORD")
+    smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+
+    if not (smtp_host and smtp_user and smtp_pass):
+        return False, "smtp not configured"
+
+    mail_from = st.secrets.get("SMTP_FROM") or smtp_user
+    created_at_kst = created_at_dt.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S")
+
+    subject = build_intercessory_email_subject(
+        district=district,
+        role=role,
+        name=name,
+        prayer_title=prayer_title,
+        linked_day=linked_day,
+        is_public=is_public,
+    )
+    body = build_intercessory_email_body(
+        district=district,
+        role=role,
+        name=name,
+        uid=uid,
+        prayer_title=prayer_title,
+        prayer_content=prayer_content,
+        is_public=is_public,
+        linked_day=linked_day,
+        created_at_kst=created_at_kst,
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = mail_from
+    msg["To"] = ", ".join(to_list)
+    if cc_list:
+        msg["Cc"] = ", ".join(cc_list)
+    msg.set_content(body)
+
+    # TLS SMTP send
+    context = ssl.create_default_context()
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+        server.ehlo()
+        try:
+            server.starttls(context=context)
+            server.ehlo()
+        except Exception:
+            # 일부 서버는 STARTTLS가 없을 수 있음
+            pass
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+
+    return True, "sent"
 
 
 # -------------------------
@@ -1720,6 +1887,7 @@ with footer_col1:
         def _toggle_pray_panel():
             st.session_state["pray_panel_open"] = not st.session_state.get("pray_panel_open", False)
             st.session_state["pray_err"] = ""
+            st.session_state["pray_email_err"] = ""
 
         # 제목(항상 노출) + 비콘(항상 점멸) + 우측 버튼
         left, right = st.columns([6, 1])
@@ -1751,6 +1919,7 @@ with footer_col1:
             st.session_state.setdefault("pray_ok", False)
             st.session_state.setdefault("pray_last_info", "")
             st.session_state.setdefault("pray_last_title", "")
+            st.session_state.setdefault("pray_email_err", "")
 
             st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 나의 건강 회복을 위해, 가족의 구원을 위해...등", key="pray_title")
             st.text_area(
@@ -1797,6 +1966,26 @@ with footer_col1:
                     linked_day=linked,
                 )
 
+                # 이메일 알림(공동체 중보 요청 체크 시)
+                st.session_state["pray_email_err"] = ""
+                created_at_dt = now_kst()
+                if pubv:
+                    ok_email, email_status = send_intercessory_prayer_email(
+                        district=district_to_save,
+                        role=role_to_save,
+                        name=name_to_save,
+                        uid=str(uid),
+                        prayer_title=ptv,
+                        prayer_content=pcv,
+                        is_public=pubv,
+                        linked_day=linked,
+                        created_at_dt=created_at_dt,
+                    )
+                    if not ok_email:
+                        # 설정 누락/전송 실패 모두 사용자에게 알려줍니다(저장은 이미 완료).
+                        st.session_state["pray_email_err"] = "⚠️ 중보기도 요청은 저장되었지만 이메일 알림 전송이 되지 않았습니다. (관리자에게 확인 요청)"
+
+
                 who = (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
                 st.session_state["pray_last_info"] = f"{district_to_save}/{who}".strip("/")
                 st.session_state["pray_last_title"] = ptv
@@ -1817,6 +2006,8 @@ with footer_col1:
                 title = st.session_state.get("pray_last_title") or ""
                 if info and title:
                     st.success(f"({info}) '{title}' 중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
+                if st.session_state.get("pray_email_err"):
+                    st.warning(st.session_state["pray_email_err"])
                 else:
                     st.success("중보기도가 저장되었습니다. 함께 기도하겠습니다 🙏")
 
