@@ -178,9 +178,11 @@ DEFAULT_INTERCESSORY_PRAYER_TO = [
 ]
 
 DEFAULT_INTERCESSORY_PRAYER_CC = [
-    "dmstjd0407@naver.com",     # Pastor Ha Eun-seong
+    "dmstjd0407@naver.com",     # preacher Ha Eun-seong
     "pnuma17@naver.com",        # Pastor Damhoon Park
     "ecobible@gmail.com",       # Elder Seong Seong-je
+    "qpdjvn345@gmail.com,       # preacher Lee Soo-hyuk
+    "hwj5571@naver.com,         # Elder Jung Hye-won
 ]
 
 def build_intercessory_email_subject(
