@@ -311,18 +311,27 @@ def send_intercessory_prayer_email(
         msg["Cc"] = ", ".join(cc_list)
     msg.set_content(body)
 
-    # TLS SMTP send
+    # SMTP send (587: STARTTLS / 465: SSL)
     context = ssl.create_default_context()
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
-        server.ehlo()
-        try:
-            server.starttls(context=context)
+
+    if int(smtp_port) == 465:
+        # Implicit SSL
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20, context=context) as server:
             server.ehlo()
-        except Exception:
-            # 일부 서버는 STARTTLS가 없을 수 있음
-            pass
-        server.login(smtp_user, smtp_pass)
-        server.send_message(msg)
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+    else:
+        # STARTTLS (권장: 587)
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.ehlo()
+            try:
+                server.starttls(context=context)
+                server.ehlo()
+            except Exception:
+                # 일부 서버는 STARTTLS가 없을 수 있음
+                pass
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
 
     return True, "sent"
 
@@ -1266,6 +1275,51 @@ def compute_participation(df_all: pd.DataFrame, start: date, end: date) -> Tuple
 def admin_dashboard():
     st.header("📊 관리자 대시보드")
 
+    # -------------------------
+    # 이메일 알림(중보기도) 설정/테스트
+    # -------------------------
+    with st.expander("📧 중보기도 이메일 알림 설정/테스트", expanded=False):
+        enabled = str(st.secrets.get("SEND_INTERCESSORY_EMAIL", "true")).strip().lower() not in ("0", "false", "no", "off")
+        st.write(f"- 이메일 알림: {'ON' if enabled else 'OFF'}")
+
+        custom_to = _split_emails(st.secrets.get("INTERCESSORY_PRAYER_TO", ""))
+        custom_cc = _split_emails(st.secrets.get("INTERCESSORY_PRAYER_CC", ""))
+
+        to_list = list(dict.fromkeys(DEFAULT_INTERCESSORY_PRAYER_TO + custom_to))
+        cc_list = list(dict.fromkeys(DEFAULT_INTERCESSORY_PRAYER_CC + custom_cc))
+
+        st.write(f"- To: {', '.join(to_list) if to_list else '(없음)'}")
+        st.write(f"- Cc: {', '.join(cc_list) if cc_list else '(없음)'}")
+
+        smtp_host = st.secrets.get("SMTP_HOST", "")
+        smtp_port = str(st.secrets.get("SMTP_PORT", ""))
+        smtp_user = st.secrets.get("SMTP_USER", "")
+        smtp_ok = bool(smtp_host and smtp_user and st.secrets.get("SMTP_PASSWORD"))
+
+        st.write(f"- SMTP: {'OK' if smtp_ok else 'MISSING'} (HOST={smtp_host or '-'} / PORT={smtp_port or '-'} / USER={smtp_user or '-'})")
+        st.caption("※ Gmail 사용 시 SMTP_PASSWORD에는 '앱 비밀번호(App Password)'를 넣어야 정상 전송됩니다.")
+
+        if st.button("📧 중보기도 이메일 테스트 발송", use_container_width=True):
+            try:
+                ok, status = send_intercessory_prayer_email(
+                    district="(테스트교구)",
+                    role="(테스트직분)",
+                    name="(테스트이름)",
+                    uid="TEST_UID",
+                    prayer_title="(테스트) 중보기도 이메일 발송 확인",
+                    prayer_content="이 메일은 시스템 설정 확인을 위한 테스트입니다.",
+                    is_public=True,
+                    linked_day=today_kst().isoformat(),
+                    created_at_dt=now_kst(),
+                )
+                if ok:
+                    st.success("✅ 테스트 메일 발송 완료")
+                else:
+                    st.error(f"❌ 테스트 실패: {status}")
+            except Exception as e:
+                st.error(f"❌ 예외 발생: {type(e).__name__}: {e}")
+
+
     df_all = cached_all_records_df()
     if df_all.empty:
         st.info("기록이 아직 없습니다.")
@@ -1924,6 +1978,7 @@ with footer_col1:
             st.session_state.setdefault("pray_last_info", "")
             st.session_state.setdefault("pray_last_title", "")
             st.session_state.setdefault("pray_email_err", "")
+            st.session_state.setdefault("pray_email_status", "")
 
             st.text_input("기도 제목(필수, 100자 이내)", max_chars=100, placeholder="예) 나의 건강 회복을 위해, 가족의 구원을 위해...등", key="pray_title")
             st.text_area(
@@ -1972,21 +2027,33 @@ with footer_col1:
 
                 # 이메일 알림(중보기도 요청 저장 시)
                 st.session_state["pray_email_err"] = ""
+                st.session_state["pray_email_status"] = ""
                 created_at_dt = now_kst()
+
                 ok_email, email_status = send_intercessory_prayer_email(
-                        district=district_to_save,
-                        role=role_to_save,
-                        name=name_to_save,
-                        uid=str(uid),
-                        prayer_title=ptv,
-                        prayer_content=pcv,
-                        is_public=pubv,
-                        linked_day=linked,
-                        created_at_dt=created_at_dt,
-                    )
+                    district=district_to_save,
+                    role=role_to_save,
+                    name=name_to_save,
+                    uid=str(uid),
+                    prayer_title=ptv,
+                    prayer_content=pcv,
+                    is_public=pubv,
+                    linked_day=linked,
+                    created_at_dt=created_at_dt,
+                )
+                st.session_state["pray_email_status"] = email_status
+
                 if not ok_email:
                     # 설정 누락/전송 실패 모두 사용자에게 알려줍니다(저장은 이미 완료).
-                    st.session_state["pray_email_err"] = "⚠️ 중보기도 요청은 저장되었지만 이메일 알림 전송이 되지 않았습니다. (관리자에게 확인 요청)"
+                    msg = "⚠️ 중보기도 요청은 저장되었지만 이메일 알림 전송이 되지 않았습니다. (관리자에게 확인 요청)"
+                    # 관리자(또는 설정 시)만 실패 원인을 추가 노출
+                    try:
+                        show_reason = bool(st.session_state.get("is_admin", False)) or str(st.secrets.get("SHOW_EMAIL_STATUS", "false")).strip().lower() in ("1", "true", "yes", "on")
+                    except Exception:
+                        show_reason = bool(st.session_state.get("is_admin", False))
+                    if show_reason and email_status:
+                        msg = f"{msg} (원인: {email_status})"
+                    st.session_state["pray_email_err"] = msg
 
 
                 who = (f"{role_to_save} {name_to_save}".strip() if role_to_save else name_to_save)
